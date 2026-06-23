@@ -1,0 +1,77 @@
+// BAYK Tracker — PostgreSQL schema (aligned with antigravity-tracker frontend)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Frontend modules: Race (Boat PWA) → SAILOR, RC (Committee) → COMMITTEE
+enum UserRole {
+  SAILOR
+  COMMITTEE
+  ADMIN
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String?
+  role         UserRole @default(SAILOR)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  boats Boat[]
+
+  @@map("users")
+}
+
+model Course {
+  id          String   @id @default(cuid())
+  name        String
+  checkpoints Json     @default("[]")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  boats       Boat[]
+  trackPoints TrackPoint[]
+
+  @@map("courses")
+}
+
+model Boat {
+  id        String   @id @default(cuid())
+  name      String
+  status    String   @default("idle")
+  userId    String?  @map("user_id")
+  courseId  String?  @map("course_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  course      Course?      @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  trackPoints TrackPoint[]
+
+  @@map("boats")
+}
+
+model TrackPoint {
+  id        String   @id @default(cuid())
+  boatId    String   @map("boat_id")
+  courseId  String?  @map("course_id")
+  lat       Float
+  lng       Float
+  heading   Float?
+  speed     Float?
+  recordedAt DateTime @default(now()) @map("recorded_at")
+
+  boat   Boat    @relation(fields: [boatId], references: [id], onDelete: Cascade)
+  course Course? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+
+  @@index([boatId, recordedAt])
+  @@map("track_points")
+}

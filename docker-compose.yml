@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bayk_tracker_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bayk
+      POSTGRES_PASSWORD: bayk_secret
+      POSTGRES_DB: bayk_tracker
+    ports:
+      - "5433:5432"
+    volumes:
+      - bayk_pg_data:/var/lib/postgresql/data
+
+volumes:
+  bayk_pg_data:
