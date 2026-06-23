@@ -1,0 +1,63 @@
+import {
+  BeforeInsert,
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { v4 as uuidv4 } from 'uuid';
+import { User } from './user.entity';
+import { Course } from './course.entity';
+import { Race } from './race.entity';
+import { TrackPoint } from './track-point.entity';
+
+@Entity('boats')
+export class Boat {
+  @PrimaryColumn('text')
+  id!: string;
+
+  @Column()
+  name!: string;
+
+  @Column({ default: 'idle' })
+  status!: string;
+
+  @Column({ name: 'user_id', type: 'text', nullable: true })
+  userId!: string | null;
+
+  @Column({ name: 'course_id', type: 'text', nullable: true })
+  courseId!: string | null;
+
+  @Column({ name: 'race_id', type: 'text', nullable: true })
+  raceId!: string | null;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt!: Date;
+
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt!: Date;
+
+  @ManyToOne(() => User, (user) => user.boats, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'user_id' })
+  user!: User | null;
+
+  @ManyToOne(() => Course, (course) => course.boats, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'course_id' })
+  course!: Course | null;
+
+  @ManyToOne(() => Race, (race) => race.boats, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'race_id' })
+  race!: Race | null;
+
+  @OneToMany(() => TrackPoint, (tp) => tp.boat)
+  trackPoints!: TrackPoint[];
+
+  @BeforeInsert()
+  generateId() {
+    if (!this.id) this.id = uuidv4();
+  }
+}

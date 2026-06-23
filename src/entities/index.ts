@@ -1,0 +1,9 @@
+export { User } from './user.entity';
+export { Course } from './course.entity';
+export { Boat } from './boat.entity';
+export { TrackPoint } from './track-point.entity';
+export { Race } from './race.entity';
+export { RaceApplication } from './race-application.entity';
+export { NotificationIntegration } from './notification-integration.entity';
+export { NotificationRule } from './notification-rule.entity';
+export { NotificationLog } from './notification-log.entity';
