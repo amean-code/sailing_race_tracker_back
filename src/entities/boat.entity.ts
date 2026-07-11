@@ -35,6 +35,18 @@ export class Boat {
   @Column({ name: 'race_id', type: 'text', nullable: true })
   raceId!: string | null;
 
+  @Column({ name: 'application_id', type: 'text', nullable: true })
+  applicationId!: string | null;
+
+  @Column({ name: 'sail_number', type: 'text', nullable: true })
+  sailNumber!: string | null;
+
+  @Column({ name: 'display_color', type: 'text', nullable: true })
+  displayColor!: string | null;
+
+  @Column({ name: 'competitor_name', type: 'text', nullable: true })
+  competitorName!: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

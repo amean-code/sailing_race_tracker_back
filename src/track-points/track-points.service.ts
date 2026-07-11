@@ -112,4 +112,14 @@ export class TrackPointsService {
     });
     return points.map((p) => this.serialize(p));
   }
+
+  async findLatestByRace(raceId: string, limit = 500) {
+    const points = await this.findAll({ raceId, limit });
+    const map = new Map<string, ReturnType<typeof this.serialize>>();
+    for (const pt of points) {
+      if (!pt.boatId || map.has(pt.boatId)) continue;
+      map.set(pt.boatId, pt);
+    }
+    return map;
+  }
 }

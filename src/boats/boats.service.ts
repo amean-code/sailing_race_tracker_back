@@ -19,6 +19,10 @@ export class BoatsService {
       userId: boat.userId,
       courseId: boat.courseId,
       raceId: boat.raceId,
+      applicationId: boat.applicationId,
+      sailNumber: boat.sailNumber,
+      displayColor: boat.displayColor,
+      competitorName: boat.competitorName,
       createdAt: boat.createdAt.toISOString(),
       updatedAt: boat.updatedAt.toISOString(),
     };

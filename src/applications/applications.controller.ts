@@ -1,8 +1,7 @@
-import { Controller, Get } from '@nestjs/common';
-import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { RaceApplication } from '../entities/race-application.entity';
+import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
+import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { ApplicationsService } from './applications.service';
+import { UpdateApplicationDto } from './dto/application.dto';
 import { Roles } from '../common/decorators';
 import { AUTH_COOKIE } from '../common/constants';
 
@@ -10,34 +9,22 @@ import { AUTH_COOKIE } from '../common/constants';
 @ApiCookieAuth(AUTH_COOKIE)
 @Controller('applications')
 export class ApplicationsController {
-  constructor(
-    @InjectRepository(RaceApplication)
-    private readonly applicationsRepo: Repository<RaceApplication>,
-  ) {}
+  constructor(private readonly applicationsService: ApplicationsService) {}
 
   @Get()
   @Roles('COMMITTEE', 'ADMIN')
+  @ApiQuery({ name: 'raceId', required: false })
   @ApiOperation({ summary: 'Tüm yarış başvuruları' })
-  async findAll() {
-    const applications = await this.applicationsRepo.find({
-      relations: ['race'],
-      order: { createdAt: 'DESC' },
-    });
+  async findAll(@Query('raceId') raceId?: string) {
+    const applications = await this.applicationsService.findAll(raceId);
+    return { applications };
+  }
 
-    return {
-      applications: applications.map((app) => ({
-        id: app.id,
-        raceId: app.raceId,
-        raceTitle: app.race?.title ?? '',
-        name: app.name,
-        email: app.email,
-        phone: app.phone,
-        boatName: app.boatName,
-        sailNumber: app.sailNumber,
-        club: app.club,
-        notes: app.notes,
-        createdAt: app.createdAt.toISOString(),
-      })),
-    };
+  @Patch(':id')
+  @Roles('COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Başvuru güncelle (onay, not vb.)' })
+  async update(@Param('id') id: string, @Body() dto: UpdateApplicationDto) {
+    const application = await this.applicationsService.update(id, dto);
+    return { application };
   }
 }

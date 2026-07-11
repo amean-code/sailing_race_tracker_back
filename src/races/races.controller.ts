@@ -9,14 +9,19 @@ import {
 } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RacesService } from './races.service';
+import { RaceFleetService } from './race-fleet.service';
 import { CreateRaceDto, RaceApplicationDto, UpdateRaceDto } from './dto/race.dto';
+import { CheckInDto } from './dto/check-in.dto';
 import { CurrentUser, Public, Roles, SessionUser } from '../common/decorators';
 import { AUTH_COOKIE } from '../common/constants';
 
 @ApiTags('races')
 @Controller('races')
 export class RacesController {
-  constructor(private readonly racesService: RacesService) {}
+  constructor(
+    private readonly racesService: RacesService,
+    private readonly raceFleetService: RaceFleetService,
+  ) {}
 
   @Get()
   @ApiCookieAuth(AUTH_COOKIE)
@@ -44,6 +49,22 @@ export class RacesController {
   ) {
     const application = await this.racesService.submitApplication(id, dto);
     return { application };
+  }
+
+  @Get(':id/competitors')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Yarış katılımcıları (başvuru + tekne + konum)' })
+  async getCompetitors(@Param('id') id: string) {
+    return this.raceFleetService.getCompetitors(id);
+  }
+
+  @Post(':id/check-in')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Başvuruyu check-in yap ve tekne oluştur' })
+  async checkIn(@Param('id') id: string, @Body() dto: CheckInDto) {
+    return this.raceFleetService.checkIn(id, dto.applicationId);
   }
 
   @Get(':id')
@@ -75,8 +96,8 @@ export class RacesController {
 
   @Delete(':id')
   @ApiCookieAuth(AUTH_COOKIE)
-  @Roles('ADMIN')
-  @ApiOperation({ summary: 'Yarış sil (ADMIN)' })
+  @Roles('COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Yarış sil (COMMITTEE/ADMIN)' })
   async remove(@Param('id') id: string) {
     return this.racesService.remove(id);
   }
