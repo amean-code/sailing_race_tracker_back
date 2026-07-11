@@ -6,6 +6,7 @@ import { Race } from '../entities/race.entity';
 import { RaceStatusEnum, ApplicationStatusEnum } from '../common/constants';
 import { serializeRace } from '../common/utils/serialize-race';
 import { SessionUser } from '../common/decorators';
+import { resolveTrackingConfig } from '../common/tracking-config';
 
 type RaceWithApplication = {
   application: {
@@ -87,6 +88,9 @@ export class SailorService {
       return { activeRace: null };
     }
 
+    const raceState = active.race?.raceState ?? {};
+    const tracking = (raceState.tracking as Record<string, unknown> | undefined) ?? {};
+
     return {
       activeRace: {
         raceId: active.raceId,
@@ -96,6 +100,7 @@ export class SailorService {
         sailNumber: active.sailNumber,
         boatName: active.boatName,
         raceTitle: active.race?.title ?? '',
+        trackingConfig: resolveTrackingConfig(tracking),
       },
     };
   }

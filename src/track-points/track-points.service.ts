@@ -1,8 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TrackPoint } from '../entities/track-point.entity';
 import { TrackPointInputDto } from './dto/track-point.dto';
+
+const INVALID_BOAT_IDS = new Set(['boat-1', '']);
 
 @Injectable()
 export class TrackPointsService {
@@ -37,12 +39,24 @@ export class TrackPointsService {
     };
   }
 
+  private assertValidBoatId(boatId: string) {
+    if (!boatId || INVALID_BOAT_IDS.has(boatId)) {
+      throw new BadRequestException('Invalid boatId for track point sync');
+    }
+  }
+
   async syncBatch(points: TrackPointInputDto[]) {
     let inserted = 0;
     let skipped = 0;
     let failed = 0;
 
     for (const point of points) {
+      try {
+        this.assertValidBoatId(point.boatId);
+      } catch {
+        failed += 1;
+        continue;
+      }
       try {
         const key = this.clientKey(point);
         const existing = await this.trackPointsRepo.findOne({

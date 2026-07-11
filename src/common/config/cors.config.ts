@@ -18,17 +18,27 @@ export function getAllowedOrigins(config: ConfigService): string[] {
   return merged.length > 0 ? [...new Set(merged)] : DEFAULT_ORIGINS;
 }
 
+function isDevLanOrigin(origin: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(
+    origin,
+  );
+}
+
 export function getCorsOptions(config: ConfigService): CorsOptions {
   const allowedOrigins = getAllowedOrigins(config);
+  const isDev = config.get('NODE_ENV') !== 'production';
 
   return {
     origin: (origin, callback) => {
-      // Same-origin requests (e.g. server-to-server, curl) have no Origin header.
       if (!origin) {
         callback(null, true);
         return;
       }
       if (allowedOrigins.includes(origin)) {
+        callback(null, origin);
+        return;
+      }
+      if (isDev && isDevLanOrigin(origin)) {
         callback(null, origin);
         return;
       }
