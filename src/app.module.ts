@@ -12,6 +12,7 @@ import {
   NotificationIntegration,
   NotificationRule,
   NotificationLog,
+  SignalFlagCatalogEntity,
 } from './entities';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
@@ -21,6 +22,7 @@ import { BoatsModule } from './boats/boats.module';
 import { TrackPointsModule } from './track-points/track-points.module';
 import { ApplicationsModule } from './applications/applications.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { SignalFlagsModule } from './signal-flags/signal-flags.module';
 import { SailorModule } from './sailor/sailor.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -44,6 +46,7 @@ import { RolesGuard } from './common/guards/roles.guard';
           NotificationIntegration,
           NotificationRule,
           NotificationLog,
+          SignalFlagCatalogEntity,
         ],
         synchronize: false,
         migrations: ['dist/database/migrations/*.js'],
@@ -58,6 +61,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     TrackPointsModule,
     ApplicationsModule,
     NotificationsModule,
+    SignalFlagsModule,
     SailorModule,
   ],
   providers: [

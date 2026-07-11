@@ -11,6 +11,7 @@ import {
   NotificationIntegration,
   NotificationRule,
   NotificationLog,
+  SignalFlagCatalogEntity,
 } from '../entities';
 
 export const AppDataSource = new DataSource({
@@ -26,6 +27,7 @@ export const AppDataSource = new DataSource({
     NotificationIntegration,
     NotificationRule,
     NotificationLog,
+    SignalFlagCatalogEntity,
   ],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: false,
