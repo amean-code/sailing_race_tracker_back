@@ -48,7 +48,7 @@ export class Race {
   @Column({ default: 30 })
   capacity!: number;
 
-  @Column({ type: 'enum', enum: RaceStatusEnum, enumName: 'RaceStatus', default: RaceStatusEnum.DRAFT })
+  @Column({ type: 'enum', enum: RaceStatusEnum, enumName: 'RaceStatus', default: RaceStatusEnum.OPEN })
   status!: RaceStatusEnum;
 
   @Column({ type: 'text', nullable: true })
@@ -56,6 +56,9 @@ export class Race {
 
   @Column({ name: 'course_id', type: 'text', nullable: true })
   courseId!: string | null;
+
+  @Column({ name: 'race_state', type: 'jsonb', default: {} })
+  raceState!: Record<string, unknown>;
 
   @Column({ name: 'created_by_id', type: 'text', nullable: true })
   createdById!: string | null;

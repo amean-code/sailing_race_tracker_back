@@ -15,7 +15,18 @@ export enum UserRoleEnum {
 export enum RaceStatusEnum {
   DRAFT = 'DRAFT',
   OPEN = 'OPEN',
+  IN_PROGRESS = 'IN_PROGRESS',
+  SUSPENDED = 'SUSPENDED',
   CLOSED = 'CLOSED',
+}
+
+export enum ApplicationStatusEnum {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  CHECKED_IN = 'CHECKED_IN',
+  WITHDRAWN = 'WITHDRAWN',
+  DNS = 'DNS',
+  DNF = 'DNF',
 }
 
 export enum NotificationEventEnum {

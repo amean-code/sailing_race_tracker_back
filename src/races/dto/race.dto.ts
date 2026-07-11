@@ -3,6 +3,7 @@ import {
   IsDateString,
   IsEnum,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   Max,
@@ -70,6 +71,11 @@ export class CreateRaceDto {
   @IsOptional()
   @IsString()
   courseId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsObject()
+  raceState?: Record<string, unknown>;
 }
 
 export class UpdateRaceDto {
@@ -134,6 +140,11 @@ export class UpdateRaceDto {
   @IsOptional()
   @IsString()
   courseId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsObject()
+  raceState?: Record<string, unknown>;
 }
 
 export class RaceApplicationDto {

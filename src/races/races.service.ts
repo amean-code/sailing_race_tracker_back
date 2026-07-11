@@ -35,24 +35,30 @@ export class RacesService {
   }
 
   async findAllManage() {
-    const races = await this.racesRepo.find({ order: { startDate: 'ASC' } });
+    const races = await this.racesRepo.find({
+      relations: ['course'],
+      order: { startDate: 'ASC' },
+    });
     return Promise.all(races.map((r) => this.withCount(r)));
   }
 
   async findPublic() {
     const races = await this.racesRepo.find({
-      where: {
-        status: RaceStatusEnum.OPEN,
-      },
+      where: [
+        { status: RaceStatusEnum.OPEN },
+        { status: RaceStatusEnum.IN_PROGRESS },
+      ],
+      relations: ['course'],
       order: { startDate: 'ASC' },
     });
-    const now = new Date();
-    const open = races.filter((r) => r.registrationDeadline > now);
-    return Promise.all(open.map((r) => this.withCount(r)));
+    return Promise.all(races.map((r) => this.withCount(r)));
   }
 
   async findOne(id: string) {
-    const race = await this.racesRepo.findOne({ where: { id } });
+    const race = await this.racesRepo.findOne({
+      where: { id },
+      relations: ['course'],
+    });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
     return this.withCount(race);
   }
@@ -68,19 +74,42 @@ export class RacesService {
       registrationDeadline: new Date(dto.registrationDeadline),
       boatClass: dto.boatClass ?? null,
       capacity: dto.capacity ?? 30,
-      status: dto.status ?? RaceStatusEnum.DRAFT,
+      status: dto.status ?? RaceStatusEnum.OPEN,
       organizer: dto.organizer ?? null,
       courseId: dto.courseId ?? null,
+      raceState: dto.raceState ?? {},
       createdById,
     });
     const saved = await this.racesRepo.save(race);
-    const result = await this.withCount(saved);
+    const result = await this.findOne(saved.id);
     this.notificationsService.dispatchAsync(NotificationEventEnum.RACE_CREATED, {
       raceTitle: saved.title,
       raceLocation: saved.location,
       raceStatus: saved.status,
     });
     return result;
+  }
+
+  private applyStatusChange(race: Race, nextStatus: RaceStatusEnum): void {
+    const previous = race.status;
+
+    if (nextStatus === RaceStatusEnum.SUSPENDED && previous !== RaceStatusEnum.SUSPENDED) {
+      race.raceState = {
+        ...(race.raceState ?? {}),
+        statusBeforeSuspend: previous,
+      };
+      race.status = RaceStatusEnum.SUSPENDED;
+      return;
+    }
+
+    if (previous === RaceStatusEnum.SUSPENDED && nextStatus !== RaceStatusEnum.SUSPENDED) {
+      race.status = nextStatus;
+      const { statusBeforeSuspend: _removed, ...rest } = race.raceState ?? {};
+      race.raceState = rest;
+      return;
+    }
+
+    race.status = nextStatus;
   }
 
   async update(id: string, dto: UpdateRaceDto) {
@@ -100,12 +129,15 @@ export class RacesService {
     }
     if (dto.boatClass !== undefined) race.boatClass = dto.boatClass ?? null;
     if (dto.capacity !== undefined) race.capacity = dto.capacity;
-    if (dto.status !== undefined) race.status = dto.status;
+    if (dto.status !== undefined) this.applyStatusChange(race, dto.status);
     if (dto.organizer !== undefined) race.organizer = dto.organizer ?? null;
     if (dto.courseId !== undefined) race.courseId = dto.courseId ?? null;
+    if (dto.raceState !== undefined) {
+      race.raceState = { ...(race.raceState ?? {}), ...(dto.raceState ?? {}) };
+    }
 
     const saved = await this.racesRepo.save(race);
-    const result = await this.withCount(saved);
+    const result = await this.findOne(saved.id);
 
     const ctx = {
       raceTitle: saved.title,
