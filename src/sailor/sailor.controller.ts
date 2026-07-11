@@ -16,4 +16,19 @@ export class SailorController {
   async dashboard(@CurrentUser() user: SessionUser) {
     return this.sailorService.getDashboard(user);
   }
+
+  @Get('applied-race-ids')
+  @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Yarışçının başvurduğu yarış kimlikleri' })
+  async appliedRaceIds(@CurrentUser() user: SessionUser) {
+    const raceIds = await this.sailorService.getAppliedRaceIds(user);
+    return { raceIds };
+  }
+
+  @Get('active-race')
+  @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Yarışçının aktif check-in yarışı ve tekne bilgisi' })
+  async activeRace(@CurrentUser() user: SessionUser) {
+    return this.sailorService.getActiveRace(user);
+  }
 }

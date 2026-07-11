@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Race } from '../entities/race.entity';
-import { RaceStatusEnum } from '../common/constants';
+import { RaceStatusEnum, ApplicationStatusEnum } from '../common/constants';
 import { serializeRace } from '../common/utils/serialize-race';
 import { SessionUser } from '../common/decorators';
 
@@ -55,6 +55,51 @@ export class SailorService {
     };
   }
 
+  async getAppliedRaceIds(user: SessionUser) {
+    const email = user.email.toLowerCase();
+    const applications = await this.applicationsRepo.find({
+      where: { email },
+      select: ['raceId'],
+    });
+    return applications.map((app) => app.raceId);
+  }
+
+  async getActiveRace(user: SessionUser) {
+    const email = user.email.toLowerCase();
+    const applications = await this.applicationsRepo.find({
+      where: {
+        email,
+        status: ApplicationStatusEnum.CHECKED_IN,
+      },
+      relations: ['race'],
+      order: { checkedInAt: 'DESC' },
+    });
+
+    const active = applications.find(
+      (app) =>
+        app.boatId &&
+        app.race &&
+        (app.race.status === RaceStatusEnum.IN_PROGRESS ||
+          app.race.status === RaceStatusEnum.OPEN),
+    );
+
+    if (!active?.boatId) {
+      return { activeRace: null };
+    }
+
+    return {
+      activeRace: {
+        raceId: active.raceId,
+        boatId: active.boatId,
+        courseId: active.race?.courseId ?? null,
+        applicationId: active.id,
+        sailNumber: active.sailNumber,
+        boatName: active.boatName,
+        raceTitle: active.race?.title ?? '',
+      },
+    };
+  }
+
   async getDashboard(user: SessionUser) {
     const email = user.email.toLowerCase();
     const now = new Date();
@@ -98,17 +143,14 @@ export class SailorService {
       order: { startDate: 'ASC' },
     });
 
-    const discoverRaces = await Promise.all(
-      openRaces
-        .filter(
-          (r) =>
-            !appliedRaceIds.has(r.id) &&
-            r.registrationDeadline > now &&
-            r.startDate > now,
-        )
-        .slice(0, 5)
-        .map((r) => this.raceWithCount(r)),
+    const discoverCandidates = openRaces.filter(
+      (r) => !appliedRaceIds.has(r.id) && r.startDate > now,
     );
+    const discoverRaces = (
+      await Promise.all(discoverCandidates.map((r) => this.raceWithCount(r)))
+    )
+      .filter((race) => race.registrationOpen)
+      .slice(0, 5);
 
     const daysUntilNextRace = nextRace
       ? Math.max(

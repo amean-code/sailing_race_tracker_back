@@ -57,6 +57,16 @@ export class CheckpointDto {
   @IsOptional()
   @IsNumber()
   width?: number;
+
+  @ApiPropertyOptional({ example: 45 })
+  @IsOptional()
+  @IsNumber()
+  bearingDeg?: number;
+
+  @ApiPropertyOptional({ enum: ['port', 'starboard'] })
+  @IsOptional()
+  @IsString()
+  flagSide?: string;
 }
 
 export class CreateCourseDto {

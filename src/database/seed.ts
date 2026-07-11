@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import 'dotenv/config';
 import * as bcrypt from 'bcryptjs';
+import { IsNull } from 'typeorm';
 import { AppDataSource } from './data-source';
 import { User } from '../entities/user.entity';
 import { Course } from '../entities/course.entity';
@@ -9,7 +10,7 @@ import { Race } from '../entities/race.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { UserRoleEnum, RaceStatusEnum } from '../common/constants';
 
-const defaultCourse = {
+const defaultCourseData = {
   name: 'Bodrum Bay Offshore',
   checkpoints: [
     { id: 'start', type: 'start', coord: [37.0255, 27.4325], width: 100, rotationDeg: 270, crossing: 'center' },
@@ -27,7 +28,7 @@ const sampleRaces = [
     venue: 'Bodrum Yelken Kulübü',
     startDate: new Date('2026-07-18T10:00:00'),
     endDate: new Date('2026-07-18T18:00:00'),
-    registrationDeadline: new Date('2026-07-10T23:59:00'),
+    registrationDeadline: new Date('2026-08-10T23:59:00'),
     boatClass: 'IRC / ORC',
     capacity: 35,
     status: RaceStatusEnum.OPEN,
@@ -40,7 +41,7 @@ const sampleRaces = [
     venue: 'D-Marin Göcek',
     startDate: new Date('2026-05-24T11:00:00'),
     endDate: new Date('2026-05-26T17:00:00'),
-    registrationDeadline: new Date('2026-05-15T23:59:00'),
+    registrationDeadline: new Date('2026-08-15T23:59:00'),
     boatClass: 'J70 / ORC Club',
     capacity: 24,
     status: RaceStatusEnum.OPEN,
@@ -75,6 +76,33 @@ async function ensureAdminUser(
   console.log(`Seeded admin ${email}`);
 }
 
+async function ensureCommitteeUser(
+  userRepo: ReturnType<typeof AppDataSource.getRepository<User>>,
+  email: string,
+  password: string,
+  name: string,
+) {
+  const passwordHash = await bcrypt.hash(password, 12);
+  const existing = await userRepo.findOne({ where: { email } });
+  if (existing) {
+    existing.passwordHash = passwordHash;
+    existing.role = UserRoleEnum.COMMITTEE;
+    if (!existing.name) existing.name = name;
+    await userRepo.save(existing);
+    console.log(`Ensured committee user ${email}`);
+    return;
+  }
+  await userRepo.save(
+    userRepo.create({
+      email,
+      passwordHash,
+      name,
+      role: UserRoleEnum.COMMITTEE,
+    }),
+  );
+  console.log(`Seeded committee user ${email}`);
+}
+
 async function main() {
   await AppDataSource.initialize();
   const userRepo = AppDataSource.getRepository(User);
@@ -83,9 +111,13 @@ async function main() {
   const raceRepo = AppDataSource.getRepository(Race);
 
   const courseCount = await courseRepo.count();
+  let seededCourse: Course | null = null;
   if (courseCount === 0) {
-    await courseRepo.save(courseRepo.create(defaultCourse));
+    seededCourse = await courseRepo.save(courseRepo.create(defaultCourseData));
     console.log('Seeded default course');
+  } else {
+    const courses = await courseRepo.find({ order: { createdAt: 'ASC' }, take: 1 });
+    seededCourse = courses[0] ?? null;
   }
 
   const boatCount = await boatRepo.count();
@@ -116,6 +148,20 @@ async function main() {
     'Amean Admin',
   );
 
+  await ensureAdminUser(
+    userRepo,
+    'emredgli07@gmail.com',
+    '11120617Hed',
+    'Emre Admin',
+  );
+
+  await ensureCommitteeUser(
+    userRepo,
+    'emre@hakem.com',
+    'hakem123',
+    'Emre Hakem',
+  );
+
   const demoEmail = 'demo@bayk.test';
   if (!(await userRepo.findOne({ where: { email: demoEmail } }))) {
     await userRepo.save(
@@ -132,9 +178,23 @@ async function main() {
   const raceCount = await raceRepo.count();
   if (raceCount === 0) {
     for (const race of sampleRaces) {
-      await raceRepo.save(raceRepo.create(race));
+      await raceRepo.save(
+        raceRepo.create({
+          ...race,
+          courseId: seededCourse?.id ?? null,
+        }),
+      );
     }
     console.log(`Seeded ${sampleRaces.length} races`);
+  } else if (seededCourse) {
+    const unlinked = await raceRepo.find({ where: { courseId: IsNull() } });
+    for (const race of unlinked) {
+      race.courseId = seededCourse.id;
+      await raceRepo.save(race);
+    }
+    if (unlinked.length > 0) {
+      console.log(`Linked ${unlinked.length} existing races to default course`);
+    }
   }
 
   const appRepo = AppDataSource.getRepository(RaceApplication);
