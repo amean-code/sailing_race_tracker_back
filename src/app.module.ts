@@ -48,7 +48,7 @@ import { RolesGuard } from './common/guards/roles.guard';
           NotificationLog,
           SignalFlagCatalogEntity,
         ],
-        synchronize: false,
+        synchronize: true,
         migrations: ['dist/database/migrations/*.js'],
         migrationsRun: false,
       }),
@@ -69,4 +69,4 @@ import { RolesGuard } from './common/guards/roles.guard';
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
 })
-export class AppModule {}
+export class AppModule { }
