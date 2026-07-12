@@ -40,7 +40,7 @@ async function bootstrap() {
   SwaggerModule.setup('api/docs', app, document);
 
   const port = Number(config.get('PORT', 5174));
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
 
   const apiUrl = `http://localhost:${port}/api`;
   const docsUrl = `http://localhost:${port}/api/docs`;
