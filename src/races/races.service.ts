@@ -279,7 +279,7 @@ export class RacesService {
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId },
+      where: { raceId, status: 'CHECKED_IN' },
       relations: ['boat'],
       order: { createdAt: 'ASC' },
     });
