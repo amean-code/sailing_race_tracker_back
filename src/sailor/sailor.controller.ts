@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SailorService } from './sailor.service';
 import { Roles, CurrentUser, SessionUser } from '../common/decorators';
@@ -30,5 +30,15 @@ export class SailorController {
   @ApiOperation({ summary: 'Yarışçının aktif check-in yarışı ve tekne bilgisi' })
   async activeRace(@CurrentUser() user: SessionUser) {
     return this.sailorService.getActiveRace(user);
+  }
+
+  @Get('race-results/:raceId')
+  @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Yarışçının belirli bir yarıştaki checkpoint istatistikleri' })
+  async raceResults(
+    @Param('raceId') raceId: string,
+    @CurrentUser() user: SessionUser,
+  ) {
+    return this.sailorService.getRaceResults(raceId, user);
   }
 }

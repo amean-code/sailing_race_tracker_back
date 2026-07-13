@@ -20,7 +20,7 @@ export class Boat {
   @PrimaryColumn('text')
   id!: string;
 
-  @Column()
+  @Column({ default: '' })
   name!: string;
 
   @Column({ default: 'idle' })

@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Race } from '../entities/race.entity';
 import { RaceApplication } from '../entities/race-application.entity';
+import { CheckpointPass } from '../entities/checkpoint-pass.entity';
 import { RaceStatusEnum, NotificationEventEnum } from '../common/constants';
 import { serializeRace, RaceLike } from '../common/utils/serialize-race';
 import {
@@ -15,6 +16,7 @@ import {
   RaceApplicationDto,
   UpdateRaceDto,
 } from './dto/race.dto';
+import { RecordCheckpointPassDto } from './dto/checkpoint-pass.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
@@ -24,6 +26,8 @@ export class RacesService {
     private readonly racesRepo: Repository<Race>,
     @InjectRepository(RaceApplication)
     private readonly applicationsRepo: Repository<RaceApplication>,
+    @InjectRepository(CheckpointPass)
+    private readonly checkpointPassRepo: Repository<CheckpointPass>,
     private readonly notificationsService: NotificationsService,
   ) {}
 
@@ -222,5 +226,122 @@ export class RacesService {
       email: saved.email,
       createdAt: saved.createdAt.toISOString(),
     };
+  }
+
+  async recordCheckpointPass(raceId: string, dto: RecordCheckpointPassDto) {
+    const race = await this.racesRepo.findOne({ where: { id: raceId } });
+    if (!race) throw new NotFoundException('Yarış bulunamadı');
+
+    const app = await this.applicationsRepo.findOne({
+      where: { id: dto.applicationId, raceId },
+    });
+    if (!app) throw new NotFoundException('Başvuru bulunamadı');
+
+    // Idempotency: if this application already has a pass for this checkpoint, update it
+    const existing = await this.checkpointPassRepo.findOne({
+      where: { applicationId: dto.applicationId, raceId, checkpointIndex: dto.checkpointIndex },
+    });
+
+    // Count how many other applications already passed this checkpoint (for rank)
+    const passedCount = await this.checkpointPassRepo.count({
+      where: { raceId, checkpointIndex: dto.checkpointIndex },
+    });
+    const rank = existing ? (existing.rank ?? passedCount) : passedCount + 1;
+
+    if (existing) {
+      existing.passedAt = new Date(dto.passedAt);
+      existing.elapsedSeconds = dto.elapsedSeconds ?? null;
+      existing.rank = rank;
+      await this.checkpointPassRepo.save(existing);
+      return { ok: true, id: existing.id, rank };
+    }
+
+    const pass = this.checkpointPassRepo.create({
+      raceId,
+      applicationId: dto.applicationId,
+      checkpointIndex: dto.checkpointIndex,
+      checkpointId: dto.checkpointId,
+      passedAt: new Date(dto.passedAt),
+      elapsedSeconds: dto.elapsedSeconds ?? null,
+      rank,
+    });
+    const saved = await this.checkpointPassRepo.save(pass);
+    return { ok: true, id: saved.id, rank };
+  }
+
+  async getStandings(raceId: string) {
+    const race = await this.racesRepo.findOne({ where: { id: raceId } });
+    if (!race) throw new NotFoundException('Yarış bulunamadı');
+
+    const applications = await this.applicationsRepo.find({
+      where: { raceId },
+      relations: ['boat'],
+      order: { createdAt: 'ASC' },
+    });
+
+    // Get latest checkpoint pass per application
+    const passes = await this.checkpointPassRepo.find({
+      where: { raceId },
+      order: { checkpointIndex: 'DESC', passedAt: 'ASC' },
+    });
+
+    // Build a map: applicationId -> best pass (latest checkpoint)
+    const bestPassByApp = new Map<string, CheckpointPass>();
+    for (const p of passes) {
+      const existing = bestPassByApp.get(p.applicationId);
+      if (!existing || p.checkpointIndex > existing.checkpointIndex) {
+        bestPassByApp.set(p.applicationId, p);
+      }
+    }
+
+    // Get all passes for computing segment times
+    const allPassesByApp = new Map<string, CheckpointPass[]>();
+    for (const p of passes) {
+      if (!allPassesByApp.has(p.applicationId)) allPassesByApp.set(p.applicationId, []);
+      allPassesByApp.get(p.applicationId)!.push(p);
+    }
+
+    const raceStartedAt = race.raceState?.startedAt as string | undefined;
+
+    const standings = applications.map((app) => {
+      const best = bestPassByApp.get(app.id) ?? null;
+      const appPasses = (allPassesByApp.get(app.id) ?? [])
+        .sort((a, b) => a.checkpointIndex - b.checkpointIndex);
+
+      const elapsedNow = raceStartedAt
+        ? Math.floor((Date.now() - new Date(raceStartedAt).getTime()) / 1000)
+        : null;
+
+      return {
+        applicationId: app.id,
+        sailNumber: app.sailNumber,
+        boatName: app.boatName,
+        competitorName: app.name,
+        displayColor: app.boat?.displayColor ?? null,
+        checkpointIndex: best?.checkpointIndex ?? -1,
+        checkpointId: best?.checkpointId ?? null,
+        elapsedSeconds: best?.elapsedSeconds ?? null,
+        rank: best?.rank ?? null,
+        elapsedNow,
+        passes: appPasses.map((p) => ({
+          checkpointIndex: p.checkpointIndex,
+          checkpointId: p.checkpointId,
+          passedAt: p.passedAt.toISOString(),
+          elapsedSeconds: p.elapsedSeconds,
+          rank: p.rank,
+        })),
+        status: app.status,
+        finishPosition: app.finishPosition,
+      };
+    });
+
+    // Sort by checkpointIndex DESC, then elapsedSeconds ASC
+    standings.sort((a, b) => {
+      if (b.checkpointIndex !== a.checkpointIndex) return b.checkpointIndex - a.checkpointIndex;
+      if (a.elapsedSeconds != null && b.elapsedSeconds != null) return a.elapsedSeconds - b.elapsedSeconds;
+      return 0;
+    });
+
+    return { standings, raceStartedAt: raceStartedAt ?? null };
   }
 }

@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Race } from '../entities/race.entity';
+import { CheckpointPass } from '../entities/checkpoint-pass.entity';
 import { RaceStatusEnum, ApplicationStatusEnum } from '../common/constants';
 import { serializeRace } from '../common/utils/serialize-race';
 import { SessionUser } from '../common/decorators';
@@ -28,6 +29,8 @@ export class SailorService {
     private readonly applicationsRepo: Repository<RaceApplication>,
     @InjectRepository(Race)
     private readonly racesRepo: Repository<Race>,
+    @InjectRepository(CheckpointPass)
+    private readonly checkpointPassRepo: Repository<CheckpointPass>,
   ) {}
 
   private async raceWithCount(race: Race) {
@@ -68,40 +71,53 @@ export class SailorService {
   async getActiveRace(user: SessionUser) {
     const email = user.email.toLowerCase();
     const applications = await this.applicationsRepo.find({
-      where: {
-        email,
-        status: ApplicationStatusEnum.CHECKED_IN,
-      },
+      where: [
+        { email, status: ApplicationStatusEnum.PENDING },
+        { email, status: ApplicationStatusEnum.APPROVED },
+        { email, status: ApplicationStatusEnum.CHECKED_IN },
+      ],
       relations: ['race'],
-      order: { checkedInAt: 'DESC' },
+      order: { checkedInAt: 'DESC', createdAt: 'DESC' },
     });
 
-    const active = applications.find(
+    const activeList = applications.filter(
       (app) =>
-        app.boatId &&
         app.race &&
         (app.race.status === RaceStatusEnum.IN_PROGRESS ||
           app.race.status === RaceStatusEnum.OPEN),
     );
 
-    if (!active?.boatId) {
-      return { activeRace: null };
+    if (activeList.length === 0) {
+      return { activeRace: null, activeRaces: [] };
     }
 
-    const raceState = active.race?.raceState ?? {};
-    const tracking = (raceState.tracking as Record<string, unknown> | undefined) ?? {};
+    const mapActiveRace = (app: RaceApplication) => {
+      const raceState = app.race?.raceState ?? {};
+      const tracking = (raceState.tracking as Record<string, unknown> | undefined) ?? {};
+      const startedAt = (raceState.startedAt as string | undefined) ?? null;
+      return {
+        raceId: app.raceId,
+        boatId: app.boatId,
+        courseId: app.race?.courseId ?? null,
+        applicationId: app.id,
+        applicationStatus: app.status,
+        sailNumber: app.sailNumber,
+        boatName: app.boatName,
+        raceTitle: app.race?.title ?? '',
+        raceStatus: app.race?.status ?? null,
+        raceStartedAt: startedAt,
+        trackingConfig: resolveTrackingConfig(tracking),
+      };
+    };
+
+    const activeRaces = activeList.map(mapActiveRace);
+
+    // Prefer CHECKED_IN race for the initial active race
+    const checkedIn = activeRaces.find((r) => r.applicationStatus === ApplicationStatusEnum.CHECKED_IN);
 
     return {
-      activeRace: {
-        raceId: active.raceId,
-        boatId: active.boatId,
-        courseId: active.race?.courseId ?? null,
-        applicationId: active.id,
-        sailNumber: active.sailNumber,
-        boatName: active.boatName,
-        raceTitle: active.race?.title ?? '',
-        trackingConfig: resolveTrackingConfig(tracking),
-      },
+      activeRace: checkedIn || activeRaces[0],
+      activeRaces,
     };
   }
 
@@ -180,6 +196,64 @@ export class SailorService {
       upcomingRaces: upcoming,
       completedRaces: completed,
       discoverRaces,
+    };
+  }
+
+  async getRaceResults(raceId: string, user: SessionUser) {
+    const email = user.email.toLowerCase();
+
+    // Find the application for this user in this race
+    const app = await this.applicationsRepo.findOne({
+      where: { raceId, email },
+      relations: ['race'],
+    });
+
+    if (!app || !app.race) {
+      return { results: null };
+    }
+
+    // Get all checkpoint passes for this application
+    const passes = await this.checkpointPassRepo.find({
+      where: { applicationId: app.id, raceId },
+      order: { checkpointIndex: 'ASC' },
+    });
+
+    // Get total competitors who finished (for fleet size context)
+    const fleetSize = await this.applicationsRepo.count({ where: { raceId } });
+
+    const raceStartedAt = app.race.raceState?.startedAt as string | undefined;
+
+    // Compute inter-checkpoint segment durations
+    const segments = passes.map((p, idx) => {
+      const prevElapsed = idx === 0 ? 0 : (passes[idx - 1].elapsedSeconds ?? 0);
+      const segmentSeconds = p.elapsedSeconds != null ? p.elapsedSeconds - prevElapsed : null;
+      return {
+        checkpointIndex: p.checkpointIndex,
+        checkpointId: p.checkpointId,
+        passedAt: p.passedAt.toISOString(),
+        elapsedSeconds: p.elapsedSeconds,
+        segmentSeconds,
+        rank: p.rank,
+      };
+    });
+
+    const totalElapsed = passes.length > 0
+      ? passes[passes.length - 1].elapsedSeconds
+      : null;
+
+    return {
+      results: {
+        raceId,
+        raceTitle: app.race.title,
+        sailNumber: app.sailNumber,
+        boatName: app.boatName,
+        finishPosition: app.finishPosition,
+        fleetSize: app.fleetSize ?? fleetSize,
+        raceStartedAt: raceStartedAt ?? null,
+        totalElapsedSeconds: totalElapsed,
+        segments,
+        status: app.status,
+      },
     };
   }
 }

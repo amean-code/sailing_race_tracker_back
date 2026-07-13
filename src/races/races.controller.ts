@@ -12,6 +12,7 @@ import { RacesService } from './races.service';
 import { RaceFleetService } from './race-fleet.service';
 import { CreateRaceDto, RaceApplicationDto, UpdateRaceDto } from './dto/race.dto';
 import { CheckInDto } from './dto/check-in.dto';
+import { RecordCheckpointPassDto } from './dto/checkpoint-pass.dto';
 import { CurrentUser, Public, Roles, SessionUser } from '../common/decorators';
 import { AUTH_COOKIE } from '../common/constants';
 
@@ -100,5 +101,24 @@ export class RacesController {
   @ApiOperation({ summary: 'Yarış sil (COMMITTEE/ADMIN)' })
   async remove(@Param('id') id: string) {
     return this.racesService.remove(id);
+  }
+
+  @Post(':id/checkpoint-pass')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Yarışçı checkpoint geçişini kaydet' })
+  async recordCheckpointPass(
+    @Param('id') id: string,
+    @Body() dto: RecordCheckpointPassDto,
+  ) {
+    return this.racesService.recordCheckpointPass(id, dto);
+  }
+
+  @Get(':id/standings')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Anlık yarış sıralaması' })
+  async getStandings(@Param('id') id: string) {
+    return this.racesService.getStandings(id);
   }
 }

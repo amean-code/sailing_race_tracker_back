@@ -21,13 +21,13 @@ export class Race {
   @PrimaryColumn('text')
   id!: string;
 
-  @Column()
+  @Column({ default: '' })
   title!: string;
 
   @Column({ type: 'text', nullable: true })
   description!: string | null;
 
-  @Column()
+  @Column({ default: '' })
   location!: string;
 
   @Column({ type: 'text', nullable: true })

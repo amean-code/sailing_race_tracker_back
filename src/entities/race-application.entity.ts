@@ -23,19 +23,19 @@ export class RaceApplication {
   @Column({ name: 'race_id' })
   raceId!: string;
 
-  @Column()
+  @Column({ default: '' })
   name!: string;
 
-  @Column()
+  @Column({ default: '' })
   email!: string;
 
   @Column({ type: 'text', nullable: true })
   phone!: string | null;
 
-  @Column({ name: 'boat_name' })
+  @Column({ name: 'boat_name', default: '' })
   boatName!: string;
 
-  @Column({ name: 'sail_number' })
+  @Column({ name: 'sail_number', default: '' })
   sailNumber!: string;
 
   @Column({ type: 'text', nullable: true })

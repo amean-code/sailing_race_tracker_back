@@ -13,6 +13,7 @@ import {
   NotificationRule,
   NotificationLog,
   SignalFlagCatalogEntity,
+  CheckpointPass,
 } from './entities';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
@@ -47,6 +48,7 @@ import { RolesGuard } from './common/guards/roles.guard';
           NotificationRule,
           NotificationLog,
           SignalFlagCatalogEntity,
+          CheckpointPass,
         ],
         synchronize: true,
         migrations: ['dist/database/migrations/*.js'],

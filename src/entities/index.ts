@@ -8,3 +8,4 @@ export { NotificationIntegration } from './notification-integration.entity';
 export { NotificationRule } from './notification-rule.entity';
 export { NotificationLog } from './notification-log.entity';
 export { SignalFlagCatalogEntity } from './signal-flag-catalog.entity';
+export { CheckpointPass } from './checkpoint-pass.entity';
