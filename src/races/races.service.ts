@@ -133,7 +133,12 @@ export class RacesService {
     }
     if (dto.boatClass !== undefined) race.boatClass = dto.boatClass ?? null;
     if (dto.capacity !== undefined) race.capacity = dto.capacity;
-    if (dto.status !== undefined) this.applyStatusChange(race, dto.status);
+    if (dto.status !== undefined) {
+      this.applyStatusChange(race, dto.status);
+      if (dto.status === RaceStatusEnum.CLOSED) {
+        await this.finalizeRaceResults(race.id);
+      }
+    }
     if (dto.organizer !== undefined) race.organizer = dto.organizer ?? null;
     if (dto.courseId !== undefined) race.courseId = dto.courseId ?? null;
     if (dto.raceState !== undefined) {
@@ -343,5 +348,96 @@ export class RacesService {
     });
 
     return { standings, raceStartedAt: raceStartedAt ?? null };
+  }
+
+  private async finalizeRaceResults(raceId: string): Promise<void> {
+    const race = await this.racesRepo.findOne({
+      where: { id: raceId },
+      relations: ['course'],
+    });
+    if (!race || !race.course) return;
+
+    const checkpoints = race.course.checkpoints as any[] | null;
+    if (!checkpoints || checkpoints.length === 0) return;
+
+    const finishIndex = checkpoints.length - 1;
+
+    // Fetch all applications for this race
+    const apps = await this.applicationsRepo.find({
+      where: { raceId },
+    });
+
+    if (apps.length === 0) return;
+
+    // Fetch all checkpoint passes for this race
+    const allPasses = await this.checkpointPassRepo.find({
+      where: { raceId },
+    });
+
+    // Group passes by application ID
+    const passesByApp: Record<string, CheckpointPass[]> = {};
+    for (const pass of allPasses) {
+      if (!passesByApp[pass.applicationId]) {
+        passesByApp[pass.applicationId] = [];
+      }
+      passesByApp[pass.applicationId].push(pass);
+    }
+
+    // Rank applicants
+    const rankedApps = apps.map((app) => {
+      const appPasses = passesByApp[app.id] || [];
+      
+      // Check if crossed finish line
+      const finishPass = appPasses.find((p) => p.checkpointIndex === finishIndex);
+      
+      // Get maximum checkpoint index passed
+      let maxCpIndex = -1;
+      let maxCpElapsed = 0;
+      for (const p of appPasses) {
+        if (p.checkpointIndex > maxCpIndex) {
+          maxCpIndex = p.checkpointIndex;
+          maxCpElapsed = p.elapsedSeconds ?? 0;
+        }
+      }
+
+      return {
+        app,
+        finished: !!finishPass,
+        finishElapsed: finishPass ? (finishPass.elapsedSeconds ?? Infinity) : Infinity,
+        maxCpIndex,
+        maxCpElapsed,
+      };
+    });
+
+    // Sort: 
+    // 1. Finished boats sorted by finish time (ascending)
+    // 2. Unfinished boats sorted by furthest checkpoint (descending) and time at that checkpoint (ascending)
+    // 3. Didn't start sorted by application id
+    rankedApps.sort((a, b) => {
+      if (a.finished && b.finished) {
+        return a.finishElapsed - b.finishElapsed;
+      }
+      if (a.finished) return -1;
+      if (b.finished) return 1;
+
+      if (a.maxCpIndex !== b.maxCpIndex) {
+        return b.maxCpIndex - a.maxCpIndex; // Furthest checkpoint first
+      }
+
+      if (a.maxCpIndex !== -1) {
+        return a.maxCpElapsed - b.maxCpElapsed; // Quickest time at that checkpoint first
+      }
+
+      return a.app.id.localeCompare(b.app.id);
+    });
+
+    // Save final rankings in DB
+    const fleetSize = apps.length;
+    for (let i = 0; i < rankedApps.length; i++) {
+      const item = rankedApps[i];
+      item.app.finishPosition = i + 1;
+      item.app.fleetSize = fleetSize;
+      await this.applicationsRepo.save(item.app);
+    }
   }
 }

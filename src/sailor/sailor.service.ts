@@ -80,21 +80,27 @@ export class SailorService {
       order: { checkedInAt: 'DESC', createdAt: 'DESC' },
     });
 
-    const activeList = applications.filter(
-      (app) =>
-        app.race &&
-        (app.race.status === RaceStatusEnum.IN_PROGRESS ||
-          app.race.status === RaceStatusEnum.OPEN),
-    );
+    const activeList = applications.filter((app) => {
+      if (!app.race) return false;
+      if (app.race.status === RaceStatusEnum.IN_PROGRESS || app.race.status === RaceStatusEnum.OPEN) return true;
+      if (app.race.status === RaceStatusEnum.CLOSED) {
+        // Include CLOSED races that were updated in the last 15 minutes so clients can see the result popup
+        const updatedTime = new Date(app.race.updatedAt).getTime();
+        const now = Date.now();
+        if (now - updatedTime < 15 * 60 * 1000) return true;
+      }
+      return false;
+    });
 
     if (activeList.length === 0) {
       return { activeRace: null, activeRaces: [] };
     }
 
-    const mapActiveRace = (app: RaceApplication) => {
+      const mapActiveRace = (app: RaceApplication) => {
       const raceState = app.race?.raceState ?? {};
       const tracking = (raceState.tracking as Record<string, unknown> | undefined) ?? {};
       const startedAt = (raceState.startedAt as string | undefined) ?? null;
+      const scheduledStartAt = (raceState.scheduledStartAt as string | undefined) ?? null;
       return {
         raceId: app.raceId,
         boatId: app.boatId,
@@ -106,6 +112,7 @@ export class SailorService {
         raceTitle: app.race?.title ?? '',
         raceStatus: app.race?.status ?? null,
         raceStartedAt: startedAt,
+        scheduledStartAt: scheduledStartAt,
         trackingConfig: resolveTrackingConfig(tracking),
       };
     };
@@ -127,7 +134,7 @@ export class SailorService {
 
     const applications = await this.applicationsRepo.find({
       where: { email },
-      relations: ['race'],
+      relations: ['race', 'race.course'],
       order: { createdAt: 'DESC' },
     });
 
