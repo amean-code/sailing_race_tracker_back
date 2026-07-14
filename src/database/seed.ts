@@ -163,7 +163,7 @@ async function main() {
   );
   await ensureCommitteeUser(
     userRepo,
-    'serdar.bilecem@bayk.org',
+    'serdar.bilecen@bayk.org',
     'Hakem123',
     'Serdar Bilecen',
   );
