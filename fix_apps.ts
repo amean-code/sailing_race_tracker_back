@@ -10,7 +10,7 @@ async function main() {
   const res = await ds.query(`
     UPDATE race_applications 
     SET name = 'Demo Yarışçı', 
-        email = 'demo@bayk.test', 
+        email = 'demo@themis.test', 
         boat_name = 'Rüzgar', 
         sail_number = 'TUR 42' 
     WHERE name = '' OR name IS NULL

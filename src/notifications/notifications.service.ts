@@ -201,22 +201,22 @@ export class NotificationsService {
       case NotificationEventEnum.APPLICATION_SUBMITTED:
         return {
           subject: `Başvuru alındı — ${ctx.raceTitle ?? 'Yarış'}`,
-          text: `Merhaba ${ctx.applicantName ?? ''},\n\n${race} yarışına başvurunuz alındı.\nTekne: ${ctx.boatName ?? '-'} #${ctx.sailNumber ?? '-'}\n\nBAYK Tracker`,
+          text: `Merhaba ${ctx.applicantName ?? ''},\n\n${race} yarışına başvurunuz alındı.\nTekne: ${ctx.boatName ?? '-'} #${ctx.sailNumber ?? '-'}\n\nThemis Race Tracker`,
         };
       case NotificationEventEnum.RACE_CREATED:
         return {
           subject: `Yeni yarış duyurusu — ${ctx.raceTitle ?? ''}`,
-          text: `Yeni bir yarış yayınlandı: ${race}\nKonum: ${ctx.raceLocation ?? '-'}\n\nKayıt için BAYK Tracker'ı ziyaret edin.`,
+          text: `Yeni bir yarış yayınlandı: ${race}\nKonum: ${ctx.raceLocation ?? '-'}\n\nKayıt için Themis Race Tracker'ı ziyaret edin.`,
         };
       case NotificationEventEnum.RACE_UPDATED:
         return {
           subject: `Yarış güncellendi — ${ctx.raceTitle ?? ''}`,
-          text: `${race} yarış bilgileri güncellendi. Detaylar için BAYK Tracker'ı kontrol edin.`,
+          text: `${race} yarış bilgileri güncellendi. Detaylar için Themis Race Tracker'ı kontrol edin.`,
         };
       case NotificationEventEnum.RACE_STATUS_CHANGED:
         return {
           subject: `Kayıt durumu değişti — ${ctx.raceTitle ?? ''}`,
-          text: `${race} yarışının kayıt durumu: ${ctx.raceStatus ?? 'güncellendi'}.\n\nBAYK Tracker`,
+          text: `${race} yarışının kayıt durumu: ${ctx.raceStatus ?? 'güncellendi'}.\n\nThemis Race Tracker`,
         };
       case NotificationEventEnum.RACE_DELETED:
         return {
@@ -226,10 +226,10 @@ export class NotificationsService {
       case NotificationEventEnum.USER_REGISTERED:
         return {
           subject: `Yeni kullanıcı kaydı — ${ctx.userName ?? ctx.userEmail ?? ''}`,
-          text: `Yeni kullanıcı kaydı: ${ctx.userName ?? '-'} (${ctx.userEmail ?? '-'})\n\nBAYK Tracker`,
+          text: `Yeni kullanıcı kaydı: ${ctx.userName ?? '-'} (${ctx.userEmail ?? '-'})\n\nThemis Race Tracker`,
         };
       default:
-        return { subject: 'BAYK Tracker Bildirimi', text: 'Yeni bir bildiriminiz var.' };
+        return { subject: 'Themis Race Tracker Bildirimi', text: 'Yeni bir bildiriminiz var.' };
     }
   }
 

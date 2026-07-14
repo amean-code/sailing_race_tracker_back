@@ -40,7 +40,7 @@ export class MailService {
 
     try {
       await transporter.sendMail({
-        from: config.smtpFrom || config.smtpUser || 'noreply@bayk.tracker',
+        from: config.smtpFrom || config.smtpUser || 'noreply@themis.tracker',
         to,
         subject,
         text,
@@ -57,8 +57,8 @@ export class MailService {
   async testConnection(to: string) {
     return this.sendMail(
       to,
-      'BAYK Tracker — SMTP Test',
-      'Bu mesaj BAYK Tracker SMTP entegrasyon testidir. Bağlantı başarılı.',
+      'Themis Race Tracker — SMTP Test',
+      'Bu mesaj Themis Race Tracker SMTP entegrasyon testidir. Bağlantı başarılı.',
     );
   }
 }

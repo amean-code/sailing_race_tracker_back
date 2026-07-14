@@ -128,7 +128,7 @@ async function main() {
     console.log('Seeded default boat boat-1');
   }
 
-  const adminEmail = 'admin@bayk.test';
+  const adminEmail = 'admin@themis.test';
   if (!(await userRepo.findOne({ where: { email: adminEmail } }))) {
     await userRepo.save(
       userRepo.create({
@@ -138,7 +138,7 @@ async function main() {
         role: UserRoleEnum.ADMIN,
       }),
     );
-    console.log('Seeded admin@bayk.test / admin12345');
+    console.log('Seeded admin@themis.test / admin12345');
   }
 
   await ensureAdminUser(
@@ -161,8 +161,14 @@ async function main() {
     'hakem123',
     'Emre Hakem',
   );
+  await ensureCommitteeUser(
+    userRepo,
+    'serdar.bilecem@themis.org',
+    'Hakem123',
+    'Serdar Bilecen',
+  );
 
-  const demoEmail = 'demo@bayk.test';
+  const demoEmail = 'demo@themis.test';
   if (!(await userRepo.findOne({ where: { email: demoEmail } }))) {
     await userRepo.save(
       userRepo.create({
@@ -172,7 +178,7 @@ async function main() {
         role: UserRoleEnum.SAILOR,
       }),
     );
-    console.log('Seeded demo@bayk.test / demo12345');
+    console.log('Seeded demo@themis.test / demo12345');
   }
 
   const raceCount = await raceRepo.count();

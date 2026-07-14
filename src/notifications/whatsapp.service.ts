@@ -68,7 +68,7 @@ export class WhatsAppService {
     return this.sendText(
       phone,
       message ||
-        'BAYK Tracker — Evolution WhatsApp entegrasyon testi. Bağlantı başarılı.',
+        'Themis Race Tracker — Evolution WhatsApp entegrasyon testi. Bağlantı başarılı.',
     );
   }
 

@@ -38,7 +38,7 @@ async function main() {
     'IRC 1',
     30,
     'CLOSED',
-    'BAYK',
+    'Themis',
     courseId,
     JSON.stringify({ startedAt: '2026-07-10T10:05:00.000Z' }),
   ]);
@@ -66,7 +66,7 @@ async function main() {
     'IRC 1',
     30,
     'OPEN',
-    'BAYK',
+    'Themis',
     courseId,
     JSON.stringify({}),
   ]);
