@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Boat } from '../entities/boat.entity';
@@ -36,6 +36,14 @@ export class BoatsService {
     return boats.map((b) => this.serialize(b));
   }
 
+  async findByUserId(userId: string) {
+    const boats = await this.boatsRepo.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+    });
+    return boats.map((b) => this.serialize(b));
+  }
+
   async findOne(id: string) {
     const boat = await this.boatsRepo.findOne({ where: { id } });
     if (!boat) throw new NotFoundException('Tekne bulunamadı');
@@ -49,6 +57,8 @@ export class BoatsService {
       userId: dto.userId ?? userId ?? null,
       courseId: dto.courseId ?? null,
       raceId: dto.raceId ?? null,
+      sailNumber: dto.sailNumber ?? null,
+      competitorName: dto.competitorName ?? null,
     });
     const saved = await this.boatsRepo.save(boat);
     return this.serialize(saved);
@@ -61,6 +71,8 @@ export class BoatsService {
     if (dto.status !== undefined) boat.status = dto.status;
     if (dto.courseId !== undefined) boat.courseId = dto.courseId;
     if (dto.raceId !== undefined) boat.raceId = dto.raceId;
+    if (dto.sailNumber !== undefined) boat.sailNumber = dto.sailNumber;
+    if (dto.competitorName !== undefined) boat.competitorName = dto.competitorName;
     const saved = await this.boatsRepo.save(boat);
     return this.serialize(saved);
   }
@@ -68,6 +80,14 @@ export class BoatsService {
   async remove(id: string) {
     const result = await this.boatsRepo.delete({ id });
     if (!result.affected) throw new NotFoundException('Tekne bulunamadı');
+    return { ok: true };
+  }
+
+  async removeOwned(id: string, userId: string) {
+    const boat = await this.boatsRepo.findOne({ where: { id } });
+    if (!boat) throw new NotFoundException('Tekne bulunamadı');
+    if (boat.userId !== userId) throw new ForbiddenException('Bu tekne size ait değil');
+    await this.boatsRepo.remove(boat);
     return { ok: true };
   }
 }

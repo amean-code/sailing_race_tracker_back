@@ -26,6 +26,16 @@ export class CreateBoatDto {
   @IsOptional()
   @IsString()
   raceId?: string;
+
+  @ApiPropertyOptional({ description: 'Sail number e.g. TUR 1234' })
+  @IsOptional()
+  @IsString()
+  sailNumber?: string;
+
+  @ApiPropertyOptional({ description: 'Competitor / captain name' })
+  @IsOptional()
+  @IsString()
+  competitorName?: string;
 }
 
 export class UpdateBoatDto {
@@ -48,4 +58,14 @@ export class UpdateBoatDto {
   @IsOptional()
   @IsString()
   raceId?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sailNumber?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  competitorName?: string | null;
 }

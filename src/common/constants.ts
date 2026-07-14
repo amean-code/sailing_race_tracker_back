@@ -3,13 +3,15 @@ export const API_NAME = 'Themis Race Tracker API';
 export const AUTH_COOKIE = 'themis_session';
 export const JWT_EXPIRY = '7d';
 
-export const USER_ROLES = ['SAILOR', 'COMMITTEE', 'ADMIN'] as const;
+export const USER_ROLES = ['SAILOR', 'COMMITTEE', 'ADMIN', 'SUPER_ADMIN', 'SPECTATOR'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 export enum UserRoleEnum {
   SAILOR = 'SAILOR',
   COMMITTEE = 'COMMITTEE',
   ADMIN = 'ADMIN',
+  SUPER_ADMIN = 'SUPER_ADMIN',
+  SPECTATOR = 'SPECTATOR',
 }
 
 export enum RaceStatusEnum {
