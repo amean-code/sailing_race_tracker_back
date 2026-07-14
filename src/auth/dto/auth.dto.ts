@@ -39,3 +39,25 @@ export class LoginDto {
   @MinLength(1, { message: 'Şifre gerekli' })
   password!: string;
 }
+
+export class InviteRefereeDto {
+  @ApiProperty({ example: 'referee@example.com' })
+  @IsEmail({}, { message: 'Geçerli bir e-posta girin' })
+  email!: string;
+}
+
+export class SetupPasswordDto {
+  @ApiProperty()
+  @IsString()
+  token!: string;
+
+  @ApiProperty({ minLength: 8 })
+  @IsString()
+  @MinLength(8, { message: 'Şifre en az 8 karakter olmalı' })
+  password!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  name?: string;
+}

@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  Param,
   Post,
   Res,
   UnauthorizedException,
@@ -10,8 +12,8 @@ import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
-import { LoginDto, RegisterDto } from './dto/auth.dto';
-import { Public, CurrentUser, SessionUser } from '../common/decorators';
+import { LoginDto, RegisterDto, InviteRefereeDto, SetupPasswordDto } from './dto/auth.dto';
+import { Public, CurrentUser, SessionUser, Roles } from '../common/decorators';
 import { AUTH_COOKIE } from '../common/constants';
 
 @ApiTags('auth')
@@ -69,6 +71,40 @@ export class AuthController {
   async me(@CurrentUser() session: SessionUser) {
     if (!session?.sub) throw new UnauthorizedException('Yetkisiz erişim');
     const user = await this.authService.getMe(session.sub);
+    return { user };
+  }
+
+  @Get('referees')
+  @Roles('ADMIN')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @ApiOperation({ summary: 'Tüm hakemleri listele (Sadece Admin)' })
+  async getReferees() {
+    const referees = await this.authService.getReferees();
+    return { referees };
+  }
+
+  @Post('invite-referee')
+  @Roles('ADMIN')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @ApiOperation({ summary: 'Yeni hakem davet et (Sadece Admin)' })
+  async inviteReferee(@Body() dto: InviteRefereeDto) {
+    return this.authService.inviteReferee(dto);
+  }
+
+  @Delete('referees/:id')
+  @Roles('ADMIN')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @ApiOperation({ summary: 'Hakem sil (Sadece Admin)' })
+  async deleteReferee(@Param('id') id: string) {
+    return this.authService.deleteReferee(id);
+  }
+
+  @Public()
+  @Post('setup-password')
+  @ApiOperation({ summary: 'Davet linki üzerinden şifre belirle ve giriş yap' })
+  async setupPassword(@Body() dto: SetupPasswordDto, @Res({ passthrough: true }) res: Response) {
+    const { user, token } = await this.authService.setupPassword(dto);
+    this.setCookie(res, token);
     return { user };
   }
 }

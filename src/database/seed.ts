@@ -161,12 +161,7 @@ async function main() {
     'hakem123',
     'Emre Hakem',
   );
-  await ensureCommitteeUser(
-    userRepo,
-    'serdar.bilecen@bayk.org',
-    'Hakem123',
-    'Serdar Bilecen',
-  );
+
 
   const demoEmail = 'demo@bayk.test';
   if (!(await userRepo.findOne({ where: { email: demoEmail } }))) {

@@ -23,6 +23,12 @@ export class User {
   @Column({ type: 'text', nullable: true })
   phone!: string | null;
 
+  @Column({ name: 'invite_token', type: 'text', nullable: true })
+  inviteToken!: string | null;
+
+  @Column({ name: 'invite_token_expires', type: 'timestamp', nullable: true })
+  inviteTokenExpires!: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 
