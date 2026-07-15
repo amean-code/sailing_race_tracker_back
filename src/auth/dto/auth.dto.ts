@@ -101,3 +101,27 @@ export class UpdateUserStatusDto {
   @IsEnum(UserStatusEnum)
   status!: UserStatusEnum;
 }
+
+export class UpdateProfileDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(2, { message: 'Ad en az 2 karakter olmalı' })
+  name?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(8, { message: 'Şifre en az 8 karakter olmalı' })
+  password?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  photoUrl?: string;
+}

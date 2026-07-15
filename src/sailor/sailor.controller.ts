@@ -25,6 +25,14 @@ export class SailorController {
     return { raceIds };
   }
 
+  @Get('applications')
+  @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Yarışçının yarış başvuruları' })
+  async myApplications(@CurrentUser() user: SessionUser) {
+    const applications = await this.sailorService.getMyApplications(user);
+    return { applications };
+  }
+
   @Get('active-race')
   @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
   @ApiOperation({ summary: 'Yarışçının aktif check-in yarışı ve tekne bilgisi' })

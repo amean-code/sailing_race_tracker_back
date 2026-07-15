@@ -21,6 +21,7 @@ import {
   UpdateUserStatusDto,
   CreateAdminDto,
   UpdateAdminDto,
+  UpdateProfileDto,
 } from './dto/auth.dto';
 import { Public, CurrentUser, SessionUser, Roles } from '../common/decorators';
 import { AUTH_COOKIE } from '../common/constants';
@@ -80,6 +81,15 @@ export class AuthController {
   async me(@CurrentUser() session: SessionUser) {
     if (!session?.sub) throw new UnauthorizedException('Yetkisiz erişim');
     const user = await this.authService.getMe(session.sub);
+    return { user };
+  }
+
+  @Patch('me')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @ApiOperation({ summary: 'Oturumdaki kullanıcının profilini güncelle' })
+  async updateProfile(@CurrentUser() session: SessionUser, @Body() dto: UpdateProfileDto) {
+    if (!session?.sub) throw new UnauthorizedException('Yetkisiz erişim');
+    const user = await this.authService.updateProfile(session.sub, dto);
     return { user };
   }
 

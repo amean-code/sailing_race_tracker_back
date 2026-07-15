@@ -23,6 +23,12 @@ export class BoatsService {
       sailNumber: boat.sailNumber,
       displayColor: boat.displayColor,
       competitorName: boat.competitorName,
+      photoUrl: boat.photoUrl,
+      club: boat.club,
+      boatClass: boat.boatClass,
+      length: boat.length,
+      width: boat.width,
+      color: boat.color,
       createdAt: boat.createdAt.toISOString(),
       updatedAt: boat.updatedAt.toISOString(),
     };
@@ -59,6 +65,12 @@ export class BoatsService {
       raceId: dto.raceId ?? null,
       sailNumber: dto.sailNumber ?? null,
       competitorName: dto.competitorName ?? null,
+      photoUrl: dto.photoUrl ?? null,
+      club: dto.club ?? null,
+      boatClass: dto.boatClass ?? null,
+      length: dto.length ?? null,
+      width: dto.width ?? null,
+      color: dto.color ?? null,
     });
     const saved = await this.boatsRepo.save(boat);
     return this.serialize(saved);
@@ -73,6 +85,12 @@ export class BoatsService {
     if (dto.raceId !== undefined) boat.raceId = dto.raceId;
     if (dto.sailNumber !== undefined) boat.sailNumber = dto.sailNumber;
     if (dto.competitorName !== undefined) boat.competitorName = dto.competitorName;
+    if (dto.photoUrl !== undefined) boat.photoUrl = dto.photoUrl;
+    if (dto.club !== undefined) boat.club = dto.club;
+    if (dto.boatClass !== undefined) boat.boatClass = dto.boatClass;
+    if (dto.length !== undefined) boat.length = dto.length;
+    if (dto.width !== undefined) boat.width = dto.width;
+    if (dto.color !== undefined) boat.color = dto.color;
     const saved = await this.boatsRepo.save(boat);
     return this.serialize(saved);
   }

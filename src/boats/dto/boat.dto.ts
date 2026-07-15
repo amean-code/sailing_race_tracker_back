@@ -36,8 +36,35 @@ export class CreateBoatDto {
   @IsOptional()
   @IsString()
   competitorName?: string;
-}
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  photoUrl?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  club?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  boatClass?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  length?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  width?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  color?: string;
+}
 export class UpdateBoatDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -68,4 +95,32 @@ export class UpdateBoatDto {
   @IsOptional()
   @IsString()
   competitorName?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  photoUrl?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  club?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  boatClass?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  length?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  width?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  color?: string | null;
 }

@@ -26,6 +26,9 @@ export class User {
   @Column({ type: 'text', nullable: true })
   phone!: string | null;
 
+  @Column({ name: 'photo_url', type: 'text', nullable: true })
+  photoUrl!: string | null;
+
   @Column({ name: 'last_login_at', type: 'timestamp', nullable: true })
   lastLoginAt!: Date | null;
 

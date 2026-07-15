@@ -21,6 +21,7 @@ import {
   UpdateUserStatusDto,
   CreateAdminDto,
   UpdateAdminDto,
+  UpdateProfileDto,
 } from './dto/auth.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SessionUser } from '../common/decorators/current-user.decorator';
@@ -52,18 +53,19 @@ export class AuthService {
     });
   }
 
-  toPublicUser(user: Pick<User, 'id' | 'email' | 'name' | 'role' | 'status' | 'createdAt'>) {
+  toPublicUser(user: Pick<User, 'id' | 'email' | 'name' | 'role' | 'status' | 'createdAt' | 'photoUrl'>) {
     return {
       id: user.id,
       email: user.email,
       name: user.name,
       role: user.role,
       status: user.status,
+      photoUrl: user.photoUrl,
       createdAt: user.createdAt.toISOString(),
     };
   }
 
-  private toAdminRecord(user: Pick<User, 'id' | 'email' | 'name' | 'role' | 'status' | 'phone' | 'createdAt' | 'updatedAt' | 'lastLoginAt' | 'inviteToken'>) {
+  private toAdminRecord(user: Pick<User, 'id' | 'email' | 'name' | 'role' | 'status' | 'phone' | 'createdAt' | 'updatedAt' | 'lastLoginAt' | 'inviteToken' | 'photoUrl'>) {
     return {
       id: user.id,
       email: user.email,
@@ -72,6 +74,7 @@ export class AuthService {
       role: user.role,
       status: user.status,
       inviteToken: user.inviteToken,
+      photoUrl: user.photoUrl,
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
       lastLoginAt: user.lastLoginAt ? user.lastLoginAt.toISOString() : null,
@@ -382,20 +385,35 @@ export class AuthService {
     const user = await this.usersRepo.findOne({
       where: { inviteToken: dto.token },
     });
-    if (!user) {
-      throw new BadRequestException('Geçersiz veya süresi dolmuş davet linki.');
-    }
+
+    if (!user) throw new BadRequestException('Geçersiz davet linki');
+
     user.passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
-    user.name = dto.name || user.name || 'Kullanıcı';
+    if (dto.name) user.name = dto.name;
+    user.status = UserStatusEnum.APPROVED;
     user.inviteToken = null;
     user.inviteTokenExpires = null;
-    user.status = UserStatusEnum.APPROVED;
-    user.lastLoginAt = new Date();
 
-    await this.usersRepo.save(user);
+    const saved = await this.usersRepo.save(user);
+
     return {
-      user: this.toPublicUser(user),
-      token: user.status === UserStatusEnum.APPROVED ? this.createToken(user) : undefined,
+      user: this.toPublicUser(saved),
+      token: this.createToken(saved),
     };
+  }
+
+  async updateProfile(userId: string, dto: UpdateProfileDto) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('Kullanıcı bulunamadı');
+
+    if (dto.name !== undefined) user.name = dto.name;
+    if (dto.phone !== undefined) user.phone = dto.phone;
+    if (dto.photoUrl !== undefined) user.photoUrl = dto.photoUrl;
+    if (dto.password) {
+      user.passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
+    }
+
+    const saved = await this.usersRepo.save(user);
+    return this.toPublicUser(saved);
   }
 }

@@ -47,6 +47,24 @@ export class Boat {
   @Column({ name: 'competitor_name', type: 'text', nullable: true })
   competitorName!: string | null;
 
+  @Column({ name: 'photo_url', type: 'text', nullable: true })
+  photoUrl!: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  club!: string | null;
+
+  @Column({ name: 'boat_class', type: 'text', nullable: true })
+  boatClass!: string | null;
+
+  @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })
+  length!: number | null;
+
+  @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })
+  width!: number | null;
+
+  @Column({ type: 'text', nullable: true })
+  color!: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

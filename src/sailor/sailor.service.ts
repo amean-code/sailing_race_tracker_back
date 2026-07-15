@@ -8,6 +8,7 @@ import { RaceStatusEnum, ApplicationStatusEnum } from '../common/constants';
 import { serializeRace } from '../common/utils/serialize-race';
 import { SessionUser } from '../common/decorators';
 import { resolveTrackingConfig } from '../common/tracking-config';
+import { Boat } from '../entities/boat.entity';
 
 type RaceWithApplication = {
   application: {
@@ -31,6 +32,8 @@ export class SailorService {
     private readonly racesRepo: Repository<Race>,
     @InjectRepository(CheckpointPass)
     private readonly checkpointPassRepo: Repository<CheckpointPass>,
+    @InjectRepository(Boat)
+    private readonly boatsRepo: Repository<Boat>,
   ) {}
 
   private async raceWithCount(race: Race) {
@@ -189,9 +192,14 @@ export class SailorService {
         )
       : null;
 
+    const activeApplicationsCount = applications.filter((a) => a.status === ApplicationStatusEnum.PENDING || a.status === ApplicationStatusEnum.APPROVED || a.status === ApplicationStatusEnum.CHECKED_IN).length;
+    const totalBoats = await this.boatsRepo.count({ where: { userId: user.sub } });
+
     return {
       metrics: {
         totalRegistered: registered.length,
+        activeApplicationsCount,
+        totalBoats,
         completedCount: completed.length,
         upcomingCount: upcoming.length,
         podiumCount,
@@ -262,5 +270,29 @@ export class SailorService {
         status: app.status,
       },
     };
+  }
+
+  async getMyApplications(user: SessionUser) {
+    const email = user.email.toLowerCase();
+    const applications = await this.applicationsRepo.find({
+      where: { email },
+      relations: ['race'],
+      order: { createdAt: 'DESC' },
+    });
+
+    return applications.map((app) => ({
+      id: app.id,
+      raceId: app.race?.id,
+      raceTitle: app.race?.title,
+      raceStartDate: app.race?.startDate,
+      raceStatus: app.race?.status,
+      refereeName: app.race?.organizer ?? 'Sistem',
+      boatId: app.boatId,
+      boatName: app.boatName,
+      sailNumber: app.sailNumber,
+      status: app.status,
+      createdAt: app.createdAt.toISOString(),
+      checkedInAt: app.checkedInAt ? app.checkedInAt.toISOString() : null,
+    }));
   }
 }
