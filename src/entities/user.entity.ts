@@ -1,6 +1,6 @@
 import { BeforeInsert, Column, CreateDateColumn, Entity, OneToMany, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
-import { UserRoleEnum } from '../common/constants';
+import { UserRoleEnum, UserStatusEnum } from '../common/constants';
 import { Boat } from './boat.entity';
 
 @Entity('users')
@@ -20,8 +20,14 @@ export class User {
   @Column({ type: 'enum', enum: UserRoleEnum, enumName: 'UserRole', default: UserRoleEnum.SAILOR })
   role!: UserRoleEnum;
 
+  @Column({ type: 'enum', enum: UserStatusEnum, enumName: 'UserStatus', default: UserStatusEnum.APPROVED })
+  status!: UserStatusEnum;
+
   @Column({ type: 'text', nullable: true })
   phone!: string | null;
+
+  @Column({ name: 'last_login_at', type: 'timestamp', nullable: true })
+  lastLoginAt!: Date | null;
 
   @Column({ name: 'invite_token', type: 'text', nullable: true })
   inviteToken!: string | null;

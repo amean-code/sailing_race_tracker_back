@@ -7,9 +7,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Race } from '../entities/race.entity';
+import { Course } from '../entities/course.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
-import { RaceStatusEnum, NotificationEventEnum } from '../common/constants';
+import { RaceStatusEnum, NotificationEventEnum, CourseStatusEnum } from '../common/constants';
 import { serializeRace, RaceLike } from '../common/utils/serialize-race';
 import {
   CreateRaceDto,
@@ -28,6 +29,8 @@ export class RacesService {
     private readonly applicationsRepo: Repository<RaceApplication>,
     @InjectRepository(CheckpointPass)
     private readonly checkpointPassRepo: Repository<CheckpointPass>,
+    @InjectRepository(Course)
+    private readonly coursesRepo: Repository<Course>,
     private readonly notificationsService: NotificationsService,
   ) {}
 
@@ -68,6 +71,14 @@ export class RacesService {
   }
 
   async create(dto: CreateRaceDto, createdById: string) {
+    if (dto.courseId) {
+      const course = await this.coursesRepo.findOne({ where: { id: dto.courseId } });
+      if (!course) throw new NotFoundException('Seçilen parkur bulunamadı.');
+      if (course.status !== CourseStatusEnum.APPROVED && course.status !== CourseStatusEnum.ACTIVE) {
+        throw new BadRequestException('Yalnızca Onaylanmış (APPROVED) veya Aktif (ACTIVE) parkurlar seçilebilir.');
+      }
+    }
+
     const race = this.racesRepo.create({
       title: dto.title,
       description: dto.description ?? null,
@@ -140,7 +151,16 @@ export class RacesService {
       }
     }
     if (dto.organizer !== undefined) race.organizer = dto.organizer ?? null;
-    if (dto.courseId !== undefined) race.courseId = dto.courseId ?? null;
+    if (dto.courseId !== undefined) {
+      if (dto.courseId) {
+        const course = await this.coursesRepo.findOne({ where: { id: dto.courseId } });
+        if (!course) throw new NotFoundException('Seçilen parkur bulunamadı.');
+        if (course.status !== CourseStatusEnum.APPROVED && course.status !== CourseStatusEnum.ACTIVE) {
+          throw new BadRequestException('Yalnızca Onaylanmış (APPROVED) veya Aktif (ACTIVE) parkurlar seçilebilir.');
+        }
+      }
+      race.courseId = dto.courseId ?? null;
+    }
     if (dto.raceState !== undefined) {
       race.raceState = { ...(race.raceState ?? {}), ...(dto.raceState ?? {}) };
     }
@@ -177,6 +197,30 @@ export class RacesService {
 
     this.notificationsService.dispatchAsync(NotificationEventEnum.RACE_DELETED, ctx);
     return { ok: true };
+  }
+
+  async cloneRace(id: string, createdById: string) {
+    const race = await this.racesRepo.findOne({ where: { id } });
+    if (!race) throw new NotFoundException('Yarış bulunamadı');
+
+    const clone = this.racesRepo.create({
+      title: `[KOPYA] ${race.title}`,
+      description: race.description,
+      location: race.location,
+      venue: race.venue,
+      startDate: race.startDate,
+      endDate: race.endDate,
+      registrationDeadline: race.registrationDeadline,
+      boatClass: race.boatClass,
+      capacity: race.capacity,
+      status: RaceStatusEnum.DRAFT,
+      organizer: race.organizer,
+      courseId: race.courseId,
+      raceState: {},
+      createdById,
+    });
+    const saved = await this.racesRepo.save(clone);
+    return this.findOne(saved.id);
   }
 
   async submitApplication(raceId: string, dto: RaceApplicationDto) {

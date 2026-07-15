@@ -6,6 +6,7 @@ export type SessionUser = {
   email: string;
   role: string;
   name: string | null;
+  status?: string;
 };
 
 export const CurrentUser = createParamDecorator(

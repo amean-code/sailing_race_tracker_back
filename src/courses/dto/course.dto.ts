@@ -88,3 +88,18 @@ export class CreateCourseDto {
 }
 
 export class UpdateCourseDto extends CreateCourseDto {}
+
+import { CourseStatusEnum } from '../../common/constants';
+import { IsEnum } from 'class-validator';
+
+export class UpdateCourseStatusDto {
+  @ApiProperty({ enum: CourseStatusEnum })
+  @IsEnum(CourseStatusEnum)
+  status!: CourseStatusEnum;
+}
+
+export class TransferCourseDto {
+  @ApiProperty()
+  @IsString()
+  newOwnerId!: string;
+}

@@ -6,6 +6,9 @@ export const JWT_EXPIRY = '7d';
 export const USER_ROLES = ['SAILOR', 'COMMITTEE', 'ADMIN', 'SUPER_ADMIN', 'SPECTATOR'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
+export const USER_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED'] as const;
+export type UserStatus = (typeof USER_STATUSES)[number];
+
 export enum UserRoleEnum {
   SAILOR = 'SAILOR',
   COMMITTEE = 'COMMITTEE',
@@ -14,12 +17,27 @@ export enum UserRoleEnum {
   SPECTATOR = 'SPECTATOR',
 }
 
+export enum UserStatusEnum {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  SUSPENDED = 'SUSPENDED',
+}
+
 export enum RaceStatusEnum {
   DRAFT = 'DRAFT',
   OPEN = 'OPEN',
   IN_PROGRESS = 'IN_PROGRESS',
   SUSPENDED = 'SUSPENDED',
   CLOSED = 'CLOSED',
+}
+
+export enum CourseStatusEnum {
+  DRAFT = 'DRAFT',
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  ACTIVE = 'ACTIVE',
+  INACTIVE = 'INACTIVE',
 }
 
 export enum ApplicationStatusEnum {

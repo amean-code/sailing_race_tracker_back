@@ -8,7 +8,8 @@ import { Course } from '../entities/course.entity';
 import { Boat } from '../entities/boat.entity';
 import { Race } from '../entities/race.entity';
 import { RaceApplication } from '../entities/race-application.entity';
-import { UserRoleEnum, RaceStatusEnum } from '../common/constants';
+import { UserRoleEnum, UserStatusEnum, RaceStatusEnum } from '../common/constants';
+import { syncSuperAdmins } from '../common/utils/super-admin-bootstrap';
 
 const defaultCourseData = {
   name: 'Bodrum Bay Offshore',
@@ -60,6 +61,7 @@ async function ensureAdminUser(
   if (existing) {
     existing.passwordHash = passwordHash;
     existing.role = UserRoleEnum.ADMIN;
+    existing.status = UserStatusEnum.APPROVED;
     if (!existing.name) existing.name = name;
     await userRepo.save(existing);
     console.log(`Ensured admin ${email}`);
@@ -71,6 +73,7 @@ async function ensureAdminUser(
       passwordHash,
       name,
       role: UserRoleEnum.ADMIN,
+      status: UserStatusEnum.APPROVED,
     }),
   );
   console.log(`Seeded admin ${email}`);
@@ -87,6 +90,7 @@ async function ensureCommitteeUser(
   if (existing) {
     existing.passwordHash = passwordHash;
     existing.role = UserRoleEnum.COMMITTEE;
+    existing.status = UserStatusEnum.APPROVED;
     if (!existing.name) existing.name = name;
     await userRepo.save(existing);
     console.log(`Ensured committee user ${email}`);
@@ -98,6 +102,7 @@ async function ensureCommitteeUser(
       passwordHash,
       name,
       role: UserRoleEnum.COMMITTEE,
+      status: UserStatusEnum.APPROVED,
     }),
   );
   console.log(`Seeded committee user ${email}`);
@@ -109,6 +114,8 @@ async function main() {
   const courseRepo = AppDataSource.getRepository(Course);
   const boatRepo = AppDataSource.getRepository(Boat);
   const raceRepo = AppDataSource.getRepository(Race);
+
+  await syncSuperAdmins(userRepo, console);
 
   const courseCount = await courseRepo.count();
   let seededCourse: Course | null = null;
@@ -136,6 +143,7 @@ async function main() {
         passwordHash: await bcrypt.hash('admin12345', 12),
         name: 'Admin',
         role: UserRoleEnum.ADMIN,
+        status: UserStatusEnum.APPROVED,
       }),
     );
     console.log('Seeded admin@bayk.test / admin12345');
@@ -171,6 +179,7 @@ async function main() {
         passwordHash: await bcrypt.hash('demo12345', 12),
         name: 'Demo Yarışçı',
         role: UserRoleEnum.SAILOR,
+        status: UserStatusEnum.APPROVED,
       }),
     );
     console.log('Seeded demo@bayk.test / demo12345');

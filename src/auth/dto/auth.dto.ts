@@ -6,7 +6,7 @@ import {
   IsString,
   MinLength,
 } from 'class-validator';
-import { USER_ROLES, UserRole } from '../../common/constants';
+import { USER_ROLES, USER_STATUSES, UserRole, UserStatusEnum } from '../../common/constants';
 
 export class RegisterDto {
   @ApiProperty({ example: 'sailor@example.com' })
@@ -46,6 +46,40 @@ export class InviteRefereeDto {
   email!: string;
 }
 
+export class CreateAdminDto {
+  @ApiProperty({ example: 'admin@example.com' })
+  @IsEmail({}, { message: 'Geçerli bir e-posta girin' })
+  email!: string;
+
+  @ApiProperty({ example: 'Administrator' })
+  @IsString()
+  @MinLength(2, { message: 'Ad en az 2 karakter olmalı' })
+  name!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  phone?: string;
+}
+
+export class UpdateAdminDto {
+  @ApiPropertyOptional({ example: 'admin@example.com' })
+  @IsOptional()
+  @IsEmail({}, { message: 'Geçerli bir e-posta girin' })
+  email?: string;
+
+  @ApiPropertyOptional({ example: 'Administrator' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2, { message: 'Ad en az 2 karakter olmalı' })
+  name?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  phone?: string;
+}
+
 export class SetupPasswordDto {
   @ApiProperty()
   @IsString()
@@ -60,4 +94,10 @@ export class SetupPasswordDto {
   @IsOptional()
   @IsString()
   name?: string;
+}
+
+export class UpdateUserStatusDto {
+  @ApiProperty({ enum: USER_STATUSES })
+  @IsEnum(UserStatusEnum)
+  status!: UserStatusEnum;
 }
