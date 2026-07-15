@@ -1,10 +1,11 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Boat } from '../entities/boat.entity';
 import { Race } from '../entities/race.entity';
-import { ApplicationStatusEnum } from '../common/constants';
+import { ApplicationStatusEnum, UserRoleEnum } from '../common/constants';
+import { SessionUser } from '../common/decorators';
 import { BulkUpdateApplicationDto, UpdateApplicationDto } from './dto/application.dto';
 
 @Injectable()
@@ -40,12 +41,20 @@ export class ApplicationsService {
     };
   }
 
-  async findAll(raceId?: string) {
-    const applications = await this.applicationsRepo.find({
-      where: raceId ? { raceId } : {},
-      relations: ['race'],
-      order: { createdAt: 'DESC' },
-    });
+  async findAll(user?: SessionUser, raceId?: string) {
+    const qb = this.applicationsRepo.createQueryBuilder('app')
+      .leftJoinAndSelect('app.race', 'race')
+      .orderBy('app.createdAt', 'DESC');
+
+    if (raceId) {
+      qb.andWhere('app.raceId = :raceId', { raceId });
+    }
+
+    if (user?.role === UserRoleEnum.COMMITTEE) {
+      qb.andWhere('race.createdById = :userId', { userId: user.sub });
+    }
+
+    const applications = await qb.getMany();
     return applications.map((app) => this.serialize(app));
   }
 
@@ -57,12 +66,16 @@ export class ApplicationsService {
     return colors[index % colors.length];
   }
 
-  async update(id: string, dto: UpdateApplicationDto) {
+  async update(id: string, dto: UpdateApplicationDto, user?: SessionUser) {
     const app = await this.applicationsRepo.findOne({
       where: { id },
       relations: ['race'],
     });
     if (!app) throw new NotFoundException('Başvuru bulunamadı');
+
+    if (user?.role === UserRoleEnum.COMMITTEE && app.race?.createdById !== user.sub) {
+      throw new ForbiddenException('Sadece kendi yarışınızın başvurularını güncelleyebilirsiniz.');
+    }
 
     if (dto.status !== undefined) {
       if (app.status === ApplicationStatusEnum.CHECKED_IN && dto.status !== ApplicationStatusEnum.CHECKED_IN) {
@@ -99,7 +112,7 @@ export class ApplicationsService {
     return this.serialize(saved);
   }
 
-  async bulkUpdate(dto: BulkUpdateApplicationDto) {
+  async bulkUpdate(dto: BulkUpdateApplicationDto, user?: SessionUser) {
     if (!dto.ids || dto.ids.length === 0) {
       throw new BadRequestException('En az bir başvuru seçilmelidir');
     }
@@ -114,6 +127,10 @@ export class ApplicationsService {
     const results: ReturnType<typeof this.serialize>[] = [];
 
     for (const app of apps) {
+      if (user?.role === UserRoleEnum.COMMITTEE && app.race?.createdById !== user.sub) {
+        throw new ForbiddenException('Sadece kendi yarışınızın başvurularını güncelleyebilirsiniz.');
+      }
+
       // Skip checked-in apps for status changes
       if (app.status === ApplicationStatusEnum.CHECKED_IN) {
         results.push(this.serialize(app));

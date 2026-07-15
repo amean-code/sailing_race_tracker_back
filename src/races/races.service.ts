@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,7 +11,8 @@ import { Race } from '../entities/race.entity';
 import { Course } from '../entities/course.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
-import { RaceStatusEnum, NotificationEventEnum, CourseStatusEnum } from '../common/constants';
+import { RaceStatusEnum, NotificationEventEnum, CourseStatusEnum, UserRoleEnum } from '../common/constants';
+import { SessionUser } from '../common/decorators';
 import { serializeRace, RaceLike } from '../common/utils/serialize-race';
 import {
   CreateRaceDto,
@@ -41,8 +43,13 @@ export class RacesService {
     return serializeRace({ ...race, applicationCount } as RaceLike);
   }
 
-  async findAllManage() {
+  async findAllManage(user?: SessionUser) {
+    const whereCondition = user?.role === UserRoleEnum.COMMITTEE 
+      ? { createdById: user.sub } 
+      : {};
+
     const races = await this.racesRepo.find({
+      where: whereCondition,
       relations: ['course'],
       order: { startDate: 'ASC' },
     });
@@ -127,9 +134,13 @@ export class RacesService {
     race.status = nextStatus;
   }
 
-  async update(id: string, dto: UpdateRaceDto) {
+  async update(id: string, dto: UpdateRaceDto, user?: SessionUser) {
     const race = await this.racesRepo.findOne({ where: { id } });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
+
+    if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
+      throw new ForbiddenException('Sadece kendi oluşturduğunuz yarışı düzenleyebilirsiniz.');
+    }
 
     const previousStatus = race.status;
 
@@ -183,9 +194,13 @@ export class RacesService {
     return result;
   }
 
-  async remove(id: string) {
+  async remove(id: string, user?: SessionUser) {
     const race = await this.racesRepo.findOne({ where: { id } });
-    if (!race) throw new NotFoundException('Yarış silinemedi');
+    if (!race) throw new NotFoundException('Yarış bulunamadı');
+
+    if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
+      throw new ForbiddenException('Sadece kendi oluşturduğunuz yarışı silebilirsiniz.');
+    }
 
     const ctx = {
       raceTitle: race.title,
@@ -277,9 +292,16 @@ export class RacesService {
     };
   }
 
-  async recordCheckpointPass(raceId: string, dto: RecordCheckpointPassDto) {
-    const race = await this.racesRepo.findOne({ where: { id: raceId } });
+  async recordCheckpointPass(raceId: string, dto: RecordCheckpointPassDto, user?: SessionUser) {
+    const race = await this.racesRepo.findOne({
+      where: { id: raceId },
+      relations: ['course'],
+    });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
+
+    if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
+      throw new ForbiddenException('Sadece kendi yarışınıza müdahale edebilirsiniz.');
+    }
 
     const app = await this.applicationsRepo.findOne({
       where: { id: dto.applicationId, raceId },
@@ -318,9 +340,13 @@ export class RacesService {
     return { ok: true, id: saved.id, rank };
   }
 
-  async getStandings(raceId: string) {
+  async getStandings(raceId: string, user?: SessionUser) {
     const race = await this.racesRepo.findOne({ where: { id: raceId } });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
+
+    if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
+      throw new ForbiddenException('Sadece kendi yarışınızın sıralamasına müdahale edebilirsiniz.');
+    }
 
     const applications = await this.applicationsRepo.find({
       where: { raceId, status: 'CHECKED_IN' },
@@ -483,5 +509,35 @@ export class RacesService {
       item.app.fleetSize = fleetSize;
       await this.applicationsRepo.save(item.app);
     }
+  }
+
+  async exportRaceResults(id: string, user?: SessionUser): Promise<string> {
+    const race = await this.racesRepo.findOne({ where: { id } });
+    if (!race) throw new NotFoundException('Yarış bulunamadı');
+
+    if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
+      throw new ForbiddenException('Sadece kendi yarışınızın sonuçlarını dışa aktarabilirsiniz.');
+    }
+
+    const applications = await this.applicationsRepo.find({
+      where: { raceId: id, status: 'checked_in' },
+      relations: ['boat'],
+    });
+
+    const headers = ['Tekne Adi', 'Yelken No', 'Yarismaci', 'Bitis Zamani', 'Bitis Pozisyonu', 'Durum'];
+    const rows = applications.map(app => {
+      const finishPos = app.finishPosition ? String(app.finishPosition) : '-';
+      const finishTime = app.checkedInAt ? new Date(app.checkedInAt).toLocaleString('tr-TR') : '-';
+      return [
+        `"${app.boatName || ''}"`,
+        `"${app.sailNumber || ''}"`,
+        `"${app.name || ''}"`,
+        `"${finishTime}"`,
+        `"${finishPos}"`,
+        `"${app.status}"`
+      ].join(',');
+    });
+
+    return [headers.join(','), ...rows].join('\n');
   }
 }

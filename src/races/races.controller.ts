@@ -29,8 +29,8 @@ export class RacesController {
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yarışları yönetim listesi (COMMITTEE/ADMIN/SUPER_ADMIN)' })
-  async findAllManage() {
-    const races = await this.racesService.findAllManage();
+  async findAllManage(@CurrentUser() user: SessionUser) {
+    const races = await this.racesService.findAllManage(user);
     return { races };
   }
 
@@ -100,8 +100,12 @@ export class RacesController {
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yarış güncelle' })
-  async update(@Param('id') id: string, @Body() dto: UpdateRaceDto) {
-    const race = await this.racesService.update(id, dto);
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateRaceDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    const race = await this.racesService.update(id, dto, user);
     return { race };
   }
 
@@ -109,8 +113,8 @@ export class RacesController {
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yarış sil (COMMITTEE/ADMIN/SUPER_ADMIN)' })
-  async remove(@Param('id') id: string) {
-    return this.racesService.remove(id);
+  async remove(@Param('id') id: string, @CurrentUser() user: SessionUser) {
+    return this.racesService.remove(id, user);
   }
 
   @Post(':id/checkpoint-pass')
@@ -120,15 +124,24 @@ export class RacesController {
   async recordCheckpointPass(
     @Param('id') id: string,
     @Body() dto: RecordCheckpointPassDto,
+    @CurrentUser() user: SessionUser,
   ) {
-    return this.racesService.recordCheckpointPass(id, dto);
+    return this.racesService.recordCheckpointPass(id, dto, user);
   }
 
   @Get(':id/standings')
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('SAILOR', 'COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Anlık yarış sıralaması' })
-  async getStandings(@Param('id') id: string) {
-    return this.racesService.getStandings(id);
+  async getStandings(@Param('id') id: string, @CurrentUser() user: SessionUser) {
+    return this.racesService.getStandings(id, user);
+  }
+
+  @Get(':id/export-results')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Yarış sonuçlarını dışa aktar (CSV)' })
+  async exportRaceResults(@Param('id') id: string, @CurrentUser() user: SessionUser) {
+    return this.racesService.exportRaceResults(id, user);
   }
 }
