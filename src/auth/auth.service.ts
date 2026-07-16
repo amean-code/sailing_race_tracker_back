@@ -331,6 +331,9 @@ export class AuthService {
         existing.inviteToken = uuidv4();
         existing.inviteTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
         existing.status = UserStatusEnum.PENDING;
+        if (dto.name) {
+          existing.name = dto.name;
+        }
         await this.usersRepo.save(existing);
         return {
           id: existing.id,
@@ -343,6 +346,7 @@ export class AuthService {
 
     const newUser = this.usersRepo.create({
       email: dto.email,
+      name: dto.name || '',
       role: UserRoleEnum.COMMITTEE,
       passwordHash: '',
       status: UserStatusEnum.PENDING,

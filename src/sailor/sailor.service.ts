@@ -149,11 +149,11 @@ export class SailorService {
     }
 
     const completed = registered
-      .filter((entry) => new Date(entry.race.endDate) < now)
+      .filter((entry) => new Date(entry.race.endDate) < now || entry.race.status === RaceStatusEnum.FINISHED)
       .sort((a, b) => new Date(b.race.endDate).getTime() - new Date(a.race.endDate).getTime());
 
     const upcoming = registered
-      .filter((entry) => new Date(entry.race.endDate) >= now)
+      .filter((entry) => new Date(entry.race.endDate) >= now && entry.race.status !== RaceStatusEnum.FINISHED)
       .sort((a, b) => new Date(a.race.startDate).getTime() - new Date(b.race.startDate).getTime());
 
     const nextRace = upcoming[0] ?? null;

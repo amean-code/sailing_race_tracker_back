@@ -44,6 +44,11 @@ export class InviteRefereeDto {
   @ApiProperty({ example: 'referee@example.com' })
   @IsEmail({}, { message: 'Geçerli bir e-posta girin' })
   email!: string;
+
+  @ApiPropertyOptional({ example: 'Ahmet Yılmaz' })
+  @IsOptional()
+  @IsString()
+  name?: string;
 }
 
 export class CreateAdminDto {
