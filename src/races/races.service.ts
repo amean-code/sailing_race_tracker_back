@@ -61,6 +61,7 @@ export class RacesService {
       where: [
         { status: RaceStatusEnum.OPEN },
         { status: RaceStatusEnum.IN_PROGRESS },
+        { status: RaceStatusEnum.FINISHED },
       ],
       relations: ['course'],
       order: { startDate: 'ASC' },
