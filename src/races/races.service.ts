@@ -61,7 +61,7 @@ export class RacesService {
       where: [
         { status: RaceStatusEnum.OPEN },
         { status: RaceStatusEnum.IN_PROGRESS },
-        { status: RaceStatusEnum.FINISHED },
+        { status: RaceStatusEnum.CLOSED },
       ],
       relations: ['course'],
       order: { startDate: 'ASC' },
@@ -124,11 +124,11 @@ export class RacesService {
   private applyStatusChange(race: Race, nextStatus: RaceStatusEnum): void {
     const previous = race.status;
 
-    if (previous === RaceStatusEnum.FINISHED && nextStatus !== RaceStatusEnum.FINISHED) {
+    if (previous === RaceStatusEnum.CLOSED && nextStatus !== RaceStatusEnum.CLOSED) {
       throw new BadRequestException('Tamamlanmış bir yarış tekrar başlatılamaz veya açılamaz.');
     }
 
-    if (nextStatus === RaceStatusEnum.FINISHED && previous !== RaceStatusEnum.FINISHED) {
+    if (nextStatus === RaceStatusEnum.CLOSED && previous !== RaceStatusEnum.CLOSED) {
       const now = new Date().toISOString();
       const startedAt = race.raceState?.startedAt;
       let durationSeconds = 0;
@@ -184,7 +184,7 @@ export class RacesService {
     if (dto.capacity !== undefined) race.capacity = dto.capacity;
     if (dto.status !== undefined) {
       this.applyStatusChange(race, dto.status);
-      if (dto.status === RaceStatusEnum.FINISHED) {
+      if (dto.status === RaceStatusEnum.CLOSED) {
         await this.finalizeRaceResults(race.id);
       }
     }

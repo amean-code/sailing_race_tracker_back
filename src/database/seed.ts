@@ -216,7 +216,7 @@ async function main() {
     const bodrum = allRaces.find((r) => r.title.includes('Bodrum'));
 
     if (gocek) {
-      gocek.status = RaceStatusEnum.FINISHED;
+      gocek.status = RaceStatusEnum.CLOSED;
       await raceRepo.save(gocek);
 
       const existingGocek = await appRepo.findOne({

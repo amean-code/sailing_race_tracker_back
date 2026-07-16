@@ -53,7 +53,7 @@ import { syncSuperAdmins } from './common/utils/super-admin-bootstrap';
           SignalFlagCatalogEntity,
           CheckpointPass,
         ],
-        synchronize: true,
+        synchronize: false, logging: true,
         migrations: ['dist/database/migrations/*.js'],
         migrationsRun: false,
       }),

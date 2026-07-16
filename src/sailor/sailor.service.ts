@@ -86,8 +86,8 @@ export class SailorService {
     const activeList = applications.filter((app) => {
       if (!app.race) return false;
       if (app.race.status === RaceStatusEnum.IN_PROGRESS || app.race.status === RaceStatusEnum.OPEN) return true;
-      if (app.race.status === RaceStatusEnum.FINISHED) {
-        // Include FINISHED races that were updated in the last 15 minutes so clients can see the result popup
+      if (app.race.status === RaceStatusEnum.CLOSED) {
+        // Include CLOSED races that were updated in the last 15 minutes so clients can see the result popup
         const updatedTime = new Date(app.race.updatedAt).getTime();
         const now = Date.now();
         if (now - updatedTime < 15 * 60 * 1000) return true;
@@ -158,7 +158,7 @@ export class SailorService {
 
     const completed = registered
       .filter((entry) => {
-        const isRaceFinished = entry.race.status === RaceStatusEnum.FINISHED;
+        const isRaceFinished = entry.race.status === RaceStatusEnum.CLOSED;
         const isPastEndDate = entry.race.endDate && new Date(entry.race.endDate) < now;
         
         // Check if sailor passed all checkpoints

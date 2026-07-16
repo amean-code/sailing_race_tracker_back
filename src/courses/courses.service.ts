@@ -100,11 +100,11 @@ export class CoursesService {
       const activeRaces = course.races.filter(
         (r) =>
           r.status === RaceStatusEnum.IN_PROGRESS ||
-          r.status === RaceStatusEnum.FINISHED ||
+          r.status === RaceStatusEnum.CLOSED ||
           r.status === RaceStatusEnum.SUSPENDED
       );
       if (activeRaces.length > 0) {
-        const raceListStr = activeRaces.map((r) => `"${r.title}" (${r.status === RaceStatusEnum.FINISHED ? 'Bitti' : r.status === RaceStatusEnum.IN_PROGRESS ? 'Devam Ediyor' : 'Askıya Alınmış'})`).join(', ');
+        const raceListStr = activeRaces.map((r) => `"${r.title}" (${r.status === RaceStatusEnum.CLOSED ? 'Bitti' : r.status === RaceStatusEnum.IN_PROGRESS ? 'Devam Ediyor' : 'Askıya Alınmış'})`).join(', ');
         throw new BadRequestException(
           `Bu parkur şu yarışlarda kullanıldığı (ve yarışlar başladığı/bittiği) için silinemez: ${raceListStr}`
         );
