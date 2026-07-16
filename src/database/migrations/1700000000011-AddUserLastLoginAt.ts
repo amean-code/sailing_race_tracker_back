@@ -4,17 +4,10 @@ export class AddUserLastLoginAt1700000000011 implements MigrationInterface {
   name = 'AddUserLastLoginAt1700000000011';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.addColumn(
-      'users',
-      new TableColumn({
-        name: 'last_login_at',
-        type: 'timestamp',
-        isNullable: true,
-      }),
-    );
+    await queryRunner.query(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_login_at" TIMESTAMP`);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.dropColumn('users', 'last_login_at');
+    await queryRunner.query(`ALTER TABLE "users" DROP COLUMN IF EXISTS "last_login_at"`);
   }
 }
