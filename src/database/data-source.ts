@@ -30,5 +30,5 @@ export const AppDataSource = new DataSource({
     SignalFlagCatalogEntity,
   ],
   migrations: ['src/database/migrations/*.ts'],
-  synchronize: false,
+  synchronize: true,
 });
