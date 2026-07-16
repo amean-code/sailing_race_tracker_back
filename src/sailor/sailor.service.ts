@@ -34,7 +34,7 @@ export class SailorService {
     private readonly checkpointPassRepo: Repository<CheckpointPass>,
     @InjectRepository(Boat)
     private readonly boatsRepo: Repository<Boat>,
-  ) {}
+  ) { }
 
   private async raceWithCount(race: Race) {
     const applicationCount = await this.applicationsRepo.count({
@@ -86,8 +86,8 @@ export class SailorService {
     const activeList = applications.filter((app) => {
       if (!app.race) return false;
       if (app.race.status === RaceStatusEnum.IN_PROGRESS || app.race.status === RaceStatusEnum.OPEN) return true;
-      if (app.race.status === RaceStatusEnum.CLOSED) {
-        // Include CLOSED races that were updated in the last 15 minutes so clients can see the result popup
+      if (app.race.status === RaceStatusEnum.FINISHED) {
+        // Include FINISHEDED races that were updated in the last 15 minutes so clients can see the result popup
         const updatedTime = new Date(app.race.updatedAt).getTime();
         const now = Date.now();
         if (now - updatedTime < 15 * 60 * 1000) return true;
@@ -99,7 +99,7 @@ export class SailorService {
       return { activeRace: null, activeRaces: [] };
     }
 
-      const mapActiveRace = (app: RaceApplication) => {
+    const mapActiveRace = (app: RaceApplication) => {
       const raceState = app.race?.raceState ?? {};
       const tracking = (raceState.tracking as Record<string, unknown> | undefined) ?? {};
       const startedAt = (raceState.startedAt as string | undefined) ?? null;
@@ -158,9 +158,9 @@ export class SailorService {
 
     const completed = registered
       .filter((entry) => {
-        const isRaceFinished = entry.race.status === RaceStatusEnum.CLOSED;
+        const isRaceFinished = entry.race.status === RaceStatusEnum.FINISHED;
         const isPastEndDate = entry.race.endDate && new Date(entry.race.endDate) < now;
-        
+
         // Check if sailor passed all checkpoints
         const entryPasses = passes.filter(p => p.applicationId === entry.application.id);
         const maxCp = entryPasses.length > 0 ? Math.max(...entryPasses.map(p => p.checkpointIndex)) : -1;
@@ -204,11 +204,11 @@ export class SailorService {
 
     const daysUntilNextRace = nextRace
       ? Math.max(
-          0,
-          Math.ceil(
-            (new Date(nextRace.race.startDate).getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
-          ),
-        )
+        0,
+        Math.ceil(
+          (new Date(nextRace.race.startDate).getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
+        ),
+      )
       : null;
 
     const activeApplicationsCount = applications.filter((a) => a.status === ApplicationStatusEnum.PENDING || a.status === ApplicationStatusEnum.APPROVED || a.status === ApplicationStatusEnum.CHECKED_IN).length;

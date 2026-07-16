@@ -34,7 +34,7 @@ export class RacesService {
     @InjectRepository(Course)
     private readonly coursesRepo: Repository<Course>,
     private readonly notificationsService: NotificationsService,
-  ) {}
+  ) { }
 
   private async withCount(race: Race) {
     const applicationCount = await this.applicationsRepo.count({
@@ -44,8 +44,8 @@ export class RacesService {
   }
 
   async findAllManage(user?: SessionUser) {
-    const whereCondition = user?.role === UserRoleEnum.COMMITTEE 
-      ? { createdById: user.sub } 
+    const whereCondition = user?.role === UserRoleEnum.COMMITTEE
+      ? { createdById: user.sub }
       : {};
 
     const races = await this.racesRepo.find({
@@ -61,7 +61,7 @@ export class RacesService {
       where: [
         { status: RaceStatusEnum.OPEN },
         { status: RaceStatusEnum.IN_PROGRESS },
-        { status: RaceStatusEnum.CLOSED },
+        { status: RaceStatusEnum.FINISHED },
       ],
       relations: ['course'],
       order: { startDate: 'ASC' },
@@ -124,11 +124,11 @@ export class RacesService {
   private applyStatusChange(race: Race, nextStatus: RaceStatusEnum): void {
     const previous = race.status;
 
-    if (previous === RaceStatusEnum.CLOSED && nextStatus !== RaceStatusEnum.CLOSED) {
+    if (previous === RaceStatusEnum.FINISHED && nextStatus !== RaceStatusEnum.FINISHED) {
       throw new BadRequestException('Tamamlanmış bir yarış tekrar başlatılamaz veya açılamaz.');
     }
 
-    if (nextStatus === RaceStatusEnum.CLOSED && previous !== RaceStatusEnum.CLOSED) {
+    if (nextStatus === RaceStatusEnum.FINISHED && previous !== RaceStatusEnum.FINISHED) {
       const now = new Date().toISOString();
       const startedAt = race.raceState?.startedAt;
       let durationSeconds = 0;
@@ -184,7 +184,7 @@ export class RacesService {
     if (dto.capacity !== undefined) race.capacity = dto.capacity;
     if (dto.status !== undefined) {
       this.applyStatusChange(race, dto.status);
-      if (dto.status === RaceStatusEnum.CLOSED) {
+      if (dto.status === RaceStatusEnum.FINISHED) {
         await this.finalizeRaceResults(race.id);
       }
     }
@@ -491,10 +491,10 @@ export class RacesService {
     // Rank applicants
     const rankedApps = apps.map((app) => {
       const appPasses = passesByApp[app.id] || [];
-      
+
       // Check if crossed finish line
       const finishPass = appPasses.find((p) => p.checkpointIndex === finishIndex);
-      
+
       // Get maximum checkpoint index passed
       let maxCpIndex = -1;
       let maxCpElapsed = 0;
