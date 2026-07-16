@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Race } from '../entities/race.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
@@ -148,13 +148,32 @@ export class SailorService {
       registered.push(this.toRaceEntry(app, race));
     }
 
+    const appIds = applications.map((a) => a.id);
+    let passes: CheckpointPass[] = [];
+    if (appIds.length > 0) {
+      passes = await this.checkpointPassRepo.find({
+        where: { applicationId: In(appIds) }
+      });
+    }
+
     const completed = registered
-      .filter((entry) => new Date(entry.race.endDate) < now || entry.race.status === RaceStatusEnum.FINISHED)
-      .sort((a, b) => new Date(b.race.endDate).getTime() - new Date(a.race.endDate).getTime());
+      .filter((entry) => {
+        const isRaceFinished = entry.race.status === RaceStatusEnum.FINISHED;
+        const isPastEndDate = entry.race.endDate && new Date(entry.race.endDate) < now;
+        
+        // Check if sailor passed all checkpoints
+        const entryPasses = passes.filter(p => p.applicationId === entry.application.id);
+        const maxCp = entryPasses.length > 0 ? Math.max(...entryPasses.map(p => p.checkpointIndex)) : -1;
+        const totalCps = (entry.race.course?.checkpoints as any[])?.length || 0;
+        const isSailorFinished = totalCps > 0 && maxCp >= totalCps - 1;
+
+        return isRaceFinished || isPastEndDate || isSailorFinished;
+      })
+      .sort((a, b) => new Date(b.race.endDate || 0).getTime() - new Date(a.race.endDate || 0).getTime());
 
     const upcoming = registered
-      .filter((entry) => new Date(entry.race.endDate) >= now && entry.race.status !== RaceStatusEnum.FINISHED)
-      .sort((a, b) => new Date(a.race.startDate).getTime() - new Date(b.race.startDate).getTime());
+      .filter((entry) => !completed.some(c => c.race.id === entry.race.id))
+      .sort((a, b) => new Date(a.race.startDate || 0).getTime() - new Date(b.race.startDate || 0).getTime());
 
     const nextRace = upcoming[0] ?? null;
 
