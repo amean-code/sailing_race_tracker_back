@@ -37,7 +37,7 @@ async function main() {
     new Date('2026-07-09T18:00:00Z'),
     'IRC 1',
     30,
-    'CLOSED',
+    'FINISHED',
     'Themis',
     courseId,
     JSON.stringify({ startedAt: '2026-07-10T10:05:00.000Z' }),
