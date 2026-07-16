@@ -81,9 +81,6 @@ export class RacesService {
     if (dto.courseId) {
       const course = await this.coursesRepo.findOne({ where: { id: dto.courseId } });
       if (!course) throw new NotFoundException('Seçilen parkur bulunamadı.');
-      if (course.status !== CourseStatusEnum.APPROVED && course.status !== CourseStatusEnum.ACTIVE) {
-        throw new BadRequestException('Yalnızca Onaylanmış (APPROVED) veya Aktif (ACTIVE) parkurlar seçilebilir.');
-      }
     }
 
     const race = this.racesRepo.create({
@@ -102,6 +99,17 @@ export class RacesService {
       raceState: dto.raceState ?? {},
       createdById,
     });
+    if (race.courseId && (race.status === RaceStatusEnum.OPEN || race.status === RaceStatusEnum.IN_PROGRESS)) {
+      const course = await this.coursesRepo.findOne({ where: { id: race.courseId } });
+      if (course && course.status !== CourseStatusEnum.APPROVED && course.status !== CourseStatusEnum.ACTIVE) {
+        if (dto.status === RaceStatusEnum.OPEN || dto.status === RaceStatusEnum.IN_PROGRESS) {
+          throw new BadRequestException('Seçilen parkur henüz onaylanmamış. Parkur onaylanmadan yarışı başvuruya açamazsınız.');
+        } else {
+          race.status = RaceStatusEnum.DRAFT;
+        }
+      }
+    }
+
     const saved = await this.racesRepo.save(race);
     const result = await this.findOne(saved.id);
     this.notificationsService.dispatchAsync(NotificationEventEnum.RACE_CREATED, {
@@ -114,6 +122,24 @@ export class RacesService {
 
   private applyStatusChange(race: Race, nextStatus: RaceStatusEnum): void {
     const previous = race.status;
+
+    if (previous === RaceStatusEnum.FINISHED && nextStatus !== RaceStatusEnum.FINISHED) {
+      throw new BadRequestException('Tamamlanmış bir yarış tekrar başlatılamaz veya açılamaz.');
+    }
+
+    if (nextStatus === RaceStatusEnum.FINISHED && previous !== RaceStatusEnum.FINISHED) {
+      const now = new Date().toISOString();
+      const startedAt = race.raceState?.startedAt;
+      let durationSeconds = 0;
+      if (startedAt) {
+        durationSeconds = Math.floor((new Date(now).getTime() - new Date(startedAt as string).getTime()) / 1000);
+      }
+      race.raceState = {
+        ...(race.raceState ?? {}),
+        finishedAt: now,
+        durationSeconds,
+      };
+    }
 
     if (nextStatus === RaceStatusEnum.SUSPENDED && previous !== RaceStatusEnum.SUSPENDED) {
       race.raceState = {
@@ -157,7 +183,7 @@ export class RacesService {
     if (dto.capacity !== undefined) race.capacity = dto.capacity;
     if (dto.status !== undefined) {
       this.applyStatusChange(race, dto.status);
-      if (dto.status === RaceStatusEnum.CLOSED) {
+      if (dto.status === RaceStatusEnum.FINISHED) {
         await this.finalizeRaceResults(race.id);
       }
     }
@@ -166,14 +192,22 @@ export class RacesService {
       if (dto.courseId) {
         const course = await this.coursesRepo.findOne({ where: { id: dto.courseId } });
         if (!course) throw new NotFoundException('Seçilen parkur bulunamadı.');
-        if (course.status !== CourseStatusEnum.APPROVED && course.status !== CourseStatusEnum.ACTIVE) {
-          throw new BadRequestException('Yalnızca Onaylanmış (APPROVED) veya Aktif (ACTIVE) parkurlar seçilebilir.');
-        }
       }
       race.courseId = dto.courseId ?? null;
     }
     if (dto.raceState !== undefined) {
       race.raceState = { ...(race.raceState ?? {}), ...(dto.raceState ?? {}) };
+    }
+
+    if (race.courseId && (race.status === RaceStatusEnum.OPEN || race.status === RaceStatusEnum.IN_PROGRESS)) {
+      const course = await this.coursesRepo.findOne({ where: { id: race.courseId } });
+      if (course && course.status !== CourseStatusEnum.APPROVED && course.status !== CourseStatusEnum.ACTIVE) {
+        if (dto.status === RaceStatusEnum.OPEN || dto.status === RaceStatusEnum.IN_PROGRESS) {
+          throw new BadRequestException('Seçilen parkur henüz onaylanmamış. Parkur onaylanmadan yarışı başvuruya açamazsınız.');
+        } else {
+          race.status = RaceStatusEnum.DRAFT;
+        }
+      }
     }
 
     const saved = await this.racesRepo.save(race);

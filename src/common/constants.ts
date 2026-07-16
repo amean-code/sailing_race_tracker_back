@@ -29,7 +29,7 @@ export enum RaceStatusEnum {
   OPEN = 'OPEN',
   IN_PROGRESS = 'IN_PROGRESS',
   SUSPENDED = 'SUSPENDED',
-  CLOSED = 'CLOSED',
+  FINISHED = 'FINISHED',
 }
 
 export enum CourseStatusEnum {

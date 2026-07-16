@@ -3,8 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Course } from '../entities/course.entity';
 import { CreateCourseDto, UpdateCourseDto } from './dto/course.dto';
-import { CourseStatusEnum, UserRoleEnum } from '../common/constants';
+import { CourseStatusEnum, UserRoleEnum, RaceStatusEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
+
+import { Race } from '../entities/race.entity';
 
 @Injectable()
 export class CoursesService {
@@ -46,12 +48,19 @@ export class CoursesService {
     return this.serialize(course);
   }
 
-  async create(dto: CreateCourseDto, createdById?: string) {
+  async create(dto: CreateCourseDto, user?: SessionUser) {
+    let initialStatus = CourseStatusEnum.DRAFT;
+    if (user?.role === UserRoleEnum.SUPER_ADMIN || user?.role === UserRoleEnum.ADMIN) {
+      initialStatus = CourseStatusEnum.APPROVED;
+    } else if (user?.role === UserRoleEnum.COMMITTEE) {
+      initialStatus = CourseStatusEnum.PENDING;
+    }
+
     const course = this.coursesRepo.create({
       name: dto.name,
       checkpoints: dto.checkpoints as unknown as Record<string, unknown>[],
-      createdById: createdById ?? null,
-      status: CourseStatusEnum.DRAFT,
+      createdById: user?.sub ?? null,
+      status: initialStatus,
     });
     const saved = await this.coursesRepo.save(course);
     return this.findOne(saved.id);
@@ -87,7 +96,21 @@ export class CoursesService {
     }
 
     if (course.races && course.races.length > 0) {
-      throw new BadRequestException('Bu parkur bir veya daha fazla yarışta kullanıldığı için silinemez.');
+      // Check if any linked race is already started/closed
+      const activeRaces = course.races.filter(
+        (r) =>
+          r.status === RaceStatusEnum.IN_PROGRESS ||
+          r.status === RaceStatusEnum.FINISHED ||
+          r.status === RaceStatusEnum.SUSPENDED
+      );
+      if (activeRaces.length > 0) {
+        const raceListStr = activeRaces.map((r) => `"${r.title}" (${r.status === RaceStatusEnum.FINISHED ? 'Bitti' : r.status === RaceStatusEnum.IN_PROGRESS ? 'Devam Ediyor' : 'Askıya Alınmış'})`).join(', ');
+        throw new BadRequestException(
+          `Bu parkur şu yarışlarda kullanıldığı (ve yarışlar başladığı/bittiği) için silinemez: ${raceListStr}`
+        );
+      }
+      // Nullify courseId for all linked non-started (OPEN/DRAFT) races
+      await this.coursesRepo.manager.update(Race, { courseId: id }, { courseId: null });
     }
 
     await this.coursesRepo.remove(course);

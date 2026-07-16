@@ -29,7 +29,7 @@ async function bootstrap() {
   const swaggerConfig = new DocumentBuilder()
     .setTitle(API_NAME)
     .setDescription(
-      'Themis Race Tracker REST API — yarış, parkur, tekne ve GPS senkronizasyonu. ' +
+      'BAYK Tracker REST API — yarış, parkur, tekne ve GPS senkronizasyonu. ' +
         `Kimlik doğrulama: \`${AUTH_COOKIE}\` httpOnly cookie.`,
     )
     .setVersion('0.2.0')

@@ -12,7 +12,7 @@ export class InitSchema1700000000001 implements MigrationInterface {
     `);
     await queryRunner.query(`
       DO $$ BEGIN
-        CREATE TYPE "RaceStatus" AS ENUM ('DRAFT', 'OPEN', 'CLOSED');
+        CREATE TYPE "RaceStatus" AS ENUM ('DRAFT', 'OPEN', 'IN_PROGRESS', 'SUSPENDED', 'FINISHED');
       EXCEPTION WHEN duplicate_object THEN NULL;
       END $$;
     `);

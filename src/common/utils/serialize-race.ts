@@ -63,7 +63,7 @@ export function computeRegistrationState(
     registrationStatus = 'in_progress';
   } else if (status === RaceStatusEnum.SUSPENDED) {
     registrationStatus = 'suspended';
-  } else if (status === RaceStatusEnum.CLOSED) {
+  } else if (status === RaceStatusEnum.FINISHED) {
     registrationStatus = 'closed';
   } else if (spotsLeft <= 0) {
     registrationStatus = 'full';
