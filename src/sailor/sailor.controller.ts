@@ -49,4 +49,14 @@ export class SailorController {
   ) {
     return this.sailorService.getRaceResults(raceId, user);
   }
+
+  @Get('race-leaderboard/:raceId')
+  @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
+  @ApiOperation({ summary: 'Bir yarışın genel filo sıralaması (tüm katılımcılar)' })
+  async raceLeaderboard(
+    @Param('raceId') raceId: string,
+    @CurrentUser() user: SessionUser,
+  ) {
+    return this.sailorService.getRaceLeaderboard(raceId, user);
+  }
 }

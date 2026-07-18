@@ -29,8 +29,9 @@ export class RacesController {
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yarışları yönetim listesi (COMMITTEE/ADMIN/SUPER_ADMIN)' })
-  async findAllManage(@CurrentUser() user: SessionUser) {
-    const races = await this.racesService.findAllManage(user);
+  @ApiQuery({ name: 'status', required: false, description: 'Comma separated status list (e.g. FINISHED,CANCELLED)' })
+  async findAllManage(@CurrentUser() user: SessionUser, @Query('status') status?: string) {
+    const races = await this.racesService.findAllManage(user, status);
     return { races };
   }
 

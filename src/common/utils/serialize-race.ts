@@ -27,6 +27,7 @@ export type RaceLike = {
   createdAt: Date;
   updatedAt: Date;
   applicationCount?: number;
+  createdById?: string | null;
 };
 
 export type PublicRegistrationStatus =
@@ -123,5 +124,6 @@ export function serializeRace(race: RaceLike) {
     registrationStatus,
     createdAt: toDate(race.createdAt).toISOString(),
     updatedAt: toDate(race.updatedAt).toISOString(),
+    createdById: race.createdById ?? null,
   };
 }

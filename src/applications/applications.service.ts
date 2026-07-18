@@ -8,6 +8,8 @@ import { ApplicationStatusEnum, UserRoleEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
 import { BulkUpdateApplicationDto, UpdateApplicationDto } from './dto/application.dto';
 
+import { EventEmitter2 } from '@nestjs/event-emitter';
+
 @Injectable()
 export class ApplicationsService {
   constructor(
@@ -17,6 +19,7 @@ export class ApplicationsService {
     private readonly boatsRepo: Repository<Boat>,
     @InjectRepository(Race)
     private readonly racesRepo: Repository<Race>,
+    private eventEmitter: EventEmitter2,
   ) {}
 
   serialize(app: RaceApplication) {
@@ -103,6 +106,11 @@ export class ApplicationsService {
           await this.boatsRepo.save(boat);
           app.boatId = boat.id;
           app.checkedInAt = new Date();
+          this.eventEmitter.emit('boat.checked_in', {
+            raceId: app.raceId,
+            boatId: boat.id,
+            userId: user?.sub,
+          });
         }
       }
     }
@@ -158,6 +166,11 @@ export class ApplicationsService {
           await this.boatsRepo.save(boat);
           app.boatId = boat.id;
           app.checkedInAt = new Date();
+          this.eventEmitter.emit('boat.checked_in', {
+            raceId: app.raceId,
+            boatId: boat.id,
+            userId: user?.sub,
+          });
         }
       }
 

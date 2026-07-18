@@ -30,6 +30,7 @@ export enum RaceStatusEnum {
   IN_PROGRESS = 'IN_PROGRESS',
   SUSPENDED = 'SUSPENDED',
   FINISHED = 'FINISHED',
+  CANCELLED = 'CANCELLED',
 }
 
 export enum CourseStatusEnum {

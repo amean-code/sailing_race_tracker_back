@@ -185,6 +185,8 @@ async function main() {
     console.log('Seeded demo@bayk.test / demo12345');
   }
 
+  const committeeUser = await userRepo.findOne({ where: { email: 'emre@hakem.com' } });
+
   const raceCount = await raceRepo.count();
   if (raceCount === 0) {
     for (const race of sampleRaces) {
@@ -192,6 +194,7 @@ async function main() {
         raceRepo.create({
           ...race,
           courseId: seededCourse?.id ?? null,
+          createdById: committeeUser?.id ?? null,
         }),
       );
     }

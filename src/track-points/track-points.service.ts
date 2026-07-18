@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TrackPoint } from '../entities/track-point.entity';
 import { TrackPointInputDto } from './dto/track-point.dto';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 const INVALID_BOAT_IDS = new Set(['boat-1', '']);
 
@@ -11,6 +12,7 @@ export class TrackPointsService {
   constructor(
     @InjectRepository(TrackPoint)
     private readonly trackPointsRepo: Repository<TrackPoint>,
+    private eventEmitter: EventEmitter2,
   ) {}
 
   private resolveRecordedAt(point: TrackPointInputDto): Date {
@@ -79,8 +81,19 @@ export class TrackPointsService {
           recordedAt: this.resolveRecordedAt(point),
           clientKey: key,
         });
-        await this.trackPointsRepo.save(entity);
+        const saved = await this.trackPointsRepo.save(entity);
         inserted += 1;
+        
+        if (point.raceId) {
+          this.eventEmitter.emit('gps.received', {
+            raceId: point.raceId,
+            boatId: point.boatId,
+            lat: point.lat,
+            lng: point.lng,
+            heading: point.heading ?? 0,
+            recordedAt: saved.recordedAt.toISOString(),
+          });
+        }
       } catch {
         failed += 1;
       }

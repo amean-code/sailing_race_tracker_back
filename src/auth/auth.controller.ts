@@ -124,6 +124,14 @@ export class AuthController {
     return { user };
   }
 
+  @Delete('users/:id')
+  @Roles('ADMIN', 'SUPER_ADMIN')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @ApiOperation({ summary: 'Yarışçı/Kullanıcı sil (Admin/Super Admin)' })
+  async deleteUser(@CurrentUser() session: SessionUser, @Param('id') id: string) {
+    return this.authService.deleteUser(session, id);
+  }
+
   @Get('admins')
   @Roles('SUPER_ADMIN')
   @ApiCookieAuth(AUTH_COOKIE)

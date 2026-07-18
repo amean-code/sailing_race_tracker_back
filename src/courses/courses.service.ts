@@ -31,30 +31,36 @@ export class CoursesService {
     };
   }
 
-  async findAll() {
+  async findAll(user?: SessionUser) {
+    const where: any = {};
+    if (user?.role === UserRoleEnum.COMMITTEE) {
+      where.createdById = user.sub;
+    }
+
     const courses = await this.coursesRepo.find({
+      where,
       relations: ['createdBy', 'races'],
-      order: { updatedAt: 'DESC' },
+      order: { createdAt: 'DESC' },
     });
     return courses.map((c) => this.serialize(c));
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, user?: SessionUser) {
+    const where: any = { id };
+    if (user?.role === UserRoleEnum.COMMITTEE) {
+      where.createdById = user.sub;
+    }
+
     const course = await this.coursesRepo.findOne({
-      where: { id },
+      where,
       relations: ['createdBy', 'races'],
     });
-    if (!course) throw new NotFoundException('Parkur bulunamadı');
+    if (!course) throw new NotFoundException('Parkur bulunamadı veya erişim izniniz yok');
     return this.serialize(course);
   }
 
   async create(dto: CreateCourseDto, user?: SessionUser) {
-    let initialStatus = CourseStatusEnum.DRAFT;
-    if (user?.role === UserRoleEnum.SUPER_ADMIN || user?.role === UserRoleEnum.ADMIN) {
-      initialStatus = CourseStatusEnum.APPROVED;
-    } else if (user?.role === UserRoleEnum.COMMITTEE) {
-      initialStatus = CourseStatusEnum.PENDING;
-    }
+    let initialStatus = CourseStatusEnum.ACTIVE;
 
     const course = this.coursesRepo.create({
       name: dto.name,
@@ -63,7 +69,7 @@ export class CoursesService {
       status: initialStatus,
     });
     const saved = await this.coursesRepo.save(course);
-    return this.findOne(saved.id);
+    return this.findOne(saved.id, user);
   }
 
   async update(id: string, dto: UpdateCourseDto, user?: SessionUser) {
@@ -81,7 +87,7 @@ export class CoursesService {
     course.name = dto.name;
     course.checkpoints = dto.checkpoints as unknown as Record<string, unknown>[];
     const saved = await this.coursesRepo.save(course);
-    return this.findOne(saved.id);
+    return this.findOne(saved.id, user);
   }
 
   async remove(id: string, user?: SessionUser) {
@@ -125,14 +131,11 @@ export class CoursesService {
       if (course.createdById !== user.sub) {
         throw new ForbiddenException('Sadece kendi parkurunuzun durumunu değiştirebilirsiniz.');
       }
-      if (status !== CourseStatusEnum.PENDING && status !== CourseStatusEnum.DRAFT) {
-        throw new ForbiddenException('Hakemler yalnızca parkuru onaya gönderebilir veya taslağa çekebilir.');
-      }
     }
 
     course.status = status;
     const saved = await this.coursesRepo.save(course);
-    return this.findOne(saved.id);
+    return this.findOne(saved.id, user);
   }
 
   async transferOwner(id: string, newOwnerId: string, user?: SessionUser) {
@@ -144,6 +147,6 @@ export class CoursesService {
 
     course.createdById = newOwnerId;
     const saved = await this.coursesRepo.save(course);
-    return this.findOne(saved.id);
+    return this.findOne(saved.id, user);
   }
 }

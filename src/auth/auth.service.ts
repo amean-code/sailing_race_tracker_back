@@ -12,6 +12,8 @@ import * as bcrypt from 'bcryptjs';
 import { Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { User } from '../entities/user.entity';
+import { Boat } from '../entities/boat.entity';
+import { RaceApplication } from '../entities/race-application.entity';
 import { UserRoleEnum, UserStatusEnum, NotificationEventEnum } from '../common/constants';
 import {
   LoginDto,
@@ -277,6 +279,37 @@ export class AuthService {
     }
 
     await this.usersRepo.remove(admin);
+    return { success: true };
+  }
+
+  async deleteUser(actor: Pick<SessionUser, 'role' | 'sub'>, id: string) {
+    const user = await this.usersRepo.findOne({
+      where: { id },
+      select: ['id', 'role', 'status'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('Kullanıcı bulunamadı.');
+    }
+
+    if (!this.canManageUser(actor, user)) {
+      throw new ForbiddenException('Bu kullanıcı için işlem yapmaya yetkiniz yok');
+    }
+
+    if (actor.sub === user.id) {
+      throw new BadRequestException('Kendi hesabınızı silemezsiniz.');
+    }
+
+    await this.usersRepo.manager.transaction(async (manager) => {
+      const apps = await manager.find(RaceApplication, { where: { userId: user.id } });
+      if (apps.length > 0) await manager.remove(apps);
+
+      const boats = await manager.find(Boat, { where: { userId: user.id } });
+      if (boats.length > 0) await manager.remove(boats);
+
+      await manager.remove(user);
+    });
+
     return { success: true };
   }
 

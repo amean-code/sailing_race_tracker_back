@@ -23,16 +23,16 @@ export class CoursesController {
   @Get()
   @Roles('SAILOR', 'COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Tüm parkurları listele' })
-  async findAll() {
-    const courses = await this.coursesService.findAll();
+  async findAll(@CurrentUser() user: SessionUser) {
+    const courses = await this.coursesService.findAll(user);
     return { courses };
   }
 
   @Get(':id')
   @Roles('SAILOR', 'COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Parkur detayı' })
-  async findOne(@Param('id') id: string) {
-    const course = await this.coursesService.findOne(id);
+  async findOne(@Param('id') id: string, @CurrentUser() user: SessionUser) {
+    const course = await this.coursesService.findOne(id, user);
     return { course };
   }
 

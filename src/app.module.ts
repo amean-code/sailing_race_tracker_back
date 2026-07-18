@@ -16,6 +16,8 @@ import {
   NotificationLog,
   SignalFlagCatalogEntity,
   CheckpointPass,
+  WebhookSubscription,
+  AuditLog,
 } from './entities';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
@@ -30,10 +32,17 @@ import { SailorModule } from './sailor/sailor.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { syncSuperAdmins } from './common/utils/super-admin-bootstrap';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import { EventsModule } from './events/events.module';
+import { RaceEngineModule } from './race-engine/race-engine.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
+import { AuditLogsModule } from './audit-logs/audit-logs.module';
+import { TelemetryModule } from './telemetry/telemetry.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    EventEmitterModule.forRoot(),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -52,8 +61,11 @@ import { syncSuperAdmins } from './common/utils/super-admin-bootstrap';
           NotificationLog,
           SignalFlagCatalogEntity,
           CheckpointPass,
+          WebhookSubscription,
+          AuditLog,
         ],
-        synchronize: false, logging: true,
+        synchronize: false,
+        logging: process.env.NODE_ENV === 'production' ? false : ['query', 'error'],
         migrations: ['dist/database/migrations/*.js'],
         migrationsRun: false,
       }),
@@ -69,6 +81,11 @@ import { syncSuperAdmins } from './common/utils/super-admin-bootstrap';
     NotificationsModule,
     SignalFlagsModule,
     SailorModule,
+    EventsModule,
+    RaceEngineModule,
+    WebhooksModule,
+    AuditLogsModule,
+    TelemetryModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

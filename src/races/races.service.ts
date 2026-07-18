@@ -6,9 +6,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { Race } from '../entities/race.entity';
 import { Course } from '../entities/course.entity';
+import { User } from '../entities/user.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
 import { RaceStatusEnum, NotificationEventEnum, CourseStatusEnum, UserRoleEnum } from '../common/constants';
@@ -21,6 +22,9 @@ import {
 } from './dto/race.dto';
 import { RecordCheckpointPassDto } from './dto/checkpoint-pass.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { MailService } from '../notifications/mail.service';
+
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 @Injectable()
 export class RacesService {
@@ -33,7 +37,11 @@ export class RacesService {
     private readonly checkpointPassRepo: Repository<CheckpointPass>,
     @InjectRepository(Course)
     private readonly coursesRepo: Repository<Course>,
+    @InjectRepository(User)
+    private readonly usersRepo: Repository<User>,
     private readonly notificationsService: NotificationsService,
+    private readonly mailService: MailService,
+    private eventEmitter: EventEmitter2,
   ) { }
 
   private async withCount(race: Race) {
@@ -43,10 +51,15 @@ export class RacesService {
     return serializeRace({ ...race, applicationCount } as RaceLike);
   }
 
-  async findAllManage(user?: SessionUser) {
-    const whereCondition = user?.role === UserRoleEnum.COMMITTEE
+  async findAllManage(user?: SessionUser, status?: string) {
+    const whereCondition: any = user?.role === UserRoleEnum.COMMITTEE
       ? { createdById: user.sub }
       : {};
+
+    if (status) {
+      const statuses = status.split(',');
+      whereCondition.status = In(statuses);
+    }
 
     const races = await this.racesRepo.find({
       where: whereCondition,
@@ -118,6 +131,11 @@ export class RacesService {
       raceLocation: saved.location,
       raceStatus: saved.status,
     });
+    this.eventEmitter.emit('race.created', {
+      raceId: saved.id,
+      userId: createdById,
+      description: `Yarış oluşturuldu: ${saved.title}`,
+    });
     return result;
   }
 
@@ -187,6 +205,15 @@ export class RacesService {
       if (dto.status === RaceStatusEnum.FINISHED) {
         await this.finalizeRaceResults(race.id);
       }
+      if (dto.status === RaceStatusEnum.CANCELLED && previousStatus !== RaceStatusEnum.CANCELLED) {
+        if (!race.title.startsWith('TAMAMLANAMAYAN ')) {
+          race.title = `TAMAMLANAMAYAN ${race.title}`;
+        }
+      } else if (dto.status !== RaceStatusEnum.CANCELLED && previousStatus === RaceStatusEnum.CANCELLED) {
+        if (race.title.startsWith('TAMAMLANAMAYAN ')) {
+          race.title = race.title.replace('TAMAMLANAMAYAN ', '');
+        }
+      }
     }
     if (dto.organizer !== undefined) race.organizer = dto.organizer ?? null;
     if (dto.courseId !== undefined) {
@@ -222,6 +249,21 @@ export class RacesService {
 
     if (dto.status !== undefined && dto.status !== previousStatus) {
       this.notificationsService.dispatchAsync(NotificationEventEnum.RACE_STATUS_CHANGED, ctx);
+      
+      const statusEventMap: Record<string, string> = {
+        [RaceStatusEnum.OPEN]: 'race.opened',
+        [RaceStatusEnum.IN_PROGRESS]: 'race.started',
+        [RaceStatusEnum.FINISHED]: 'race.finished',
+        [RaceStatusEnum.CANCELLED]: 'race.cancelled',
+        [RaceStatusEnum.SUSPENDED]: 'race.suspended',
+      };
+      const eventName = statusEventMap[dto.status];
+      if (eventName) {
+        this.eventEmitter.emit(eventName, {
+          raceId: saved.id,
+          userId: user?.sub,
+        });
+      }
     } else {
       this.notificationsService.dispatchAsync(NotificationEventEnum.RACE_UPDATED, ctx);
     }
@@ -544,6 +586,56 @@ export class RacesService {
       item.app.fleetSize = fleetSize;
       await this.applicationsRepo.save(item.app);
     }
+
+    if (race.createdById) {
+      const referee = await this.usersRepo.findOne({ where: { id: race.createdById } });
+      if (referee && referee.email) {
+        this.sendResultsEmail(race, referee, rankedApps).catch(e => 
+          console.error('Sonuç maili gönderilemedi:', e)
+        );
+      }
+    }
+  }
+
+  private async sendResultsEmail(race: Race, referee: User, rankedApps: any[]) {
+    let html = `<div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">`;
+    html += `<h2 style="color: #1e293b;">${race.title} - Kesinleşen Yarış Sonuçları</h2>`;
+    html += `<p style="color: #475569; font-size: 15px;">Merhaba ${referee.name || 'Hakem'},</p>`;
+    html += `<p style="color: #475569; font-size: 15px;">Yönettiğiniz yarış başarıyla tamamlandı. Aşağıda kesinleşen yarış sonuç tablosunu bulabilirsiniz:</p>`;
+    html += `<table style="width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px;">
+      <thead>
+        <tr style="background-color: #f8fafc; text-align: left;">
+          <th style="padding: 12px; border-bottom: 2px solid #e2e8f0;">Sıra</th>
+          <th style="padding: 12px; border-bottom: 2px solid #e2e8f0;">Tekne</th>
+          <th style="padding: 12px; border-bottom: 2px solid #e2e8f0;">Yarışmacı</th>
+          <th style="padding: 12px; border-bottom: 2px solid #e2e8f0;">Durum</th>
+          <th style="padding: 12px; border-bottom: 2px solid #e2e8f0;">Süre</th>
+        </tr>
+      </thead>
+      <tbody>`;
+    
+    for (const item of rankedApps) {
+      const statusText = item.finished ? 'Bitti' : 'DNF';
+      const timeText = item.finished ? `${item.finishElapsed} sn` : '-';
+      html += `<tr>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">#${item.app.finishPosition}</td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${item.app.boatName || '-'}</td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${item.app.name || '-'}</td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${statusText}</td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${timeText}</td>
+      </tr>`;
+    }
+    
+    html += `</tbody></table>`;
+    html += `<p style="color: #64748b; font-size: 13px; margin-top: 30px;">Themis Race Tracker Otomatik Bilgilendirme Sistemi</p>`;
+    html += `</div>`;
+
+    await this.mailService.sendMail(
+      referee.email,
+      `${race.title} — Yarış Sonuçları`,
+      'Yarış başarıyla tamamlandı ve sonuçlar kesinleşti. Lütfen e-postayı HTML formatında görüntüleyin.',
+      html
+    );
   }
 
   async exportRaceResults(id: string, user?: SessionUser): Promise<string> {

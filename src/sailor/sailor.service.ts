@@ -99,11 +99,42 @@ export class SailorService {
       return { activeRace: null, activeRaces: [] };
     }
 
+    const appIds = activeList.map(app => app.id);
+    const passes = await this.checkpointPassRepo.find({
+      where: { applicationId: In(appIds) },
+      order: { checkpointIndex: 'ASC' },
+    });
+
+    const passesByApp = new Map<string, any[]>();
+    for (const p of passes) {
+      if (!passesByApp.has(p.applicationId)) passesByApp.set(p.applicationId, []);
+      passesByApp.get(p.applicationId)!.push({
+        checkpointIndex: p.checkpointIndex,
+        checkpointId: p.checkpointId,
+        passedAt: p.passedAt.toISOString(),
+        elapsedSeconds: p.elapsedSeconds,
+      });
+    }
+
     const mapActiveRace = (app: RaceApplication) => {
       const raceState = app.race?.raceState ?? {};
       const tracking = (raceState.tracking as Record<string, unknown> | undefined) ?? {};
       const startedAt = (raceState.startedAt as string | undefined) ?? null;
       const scheduledStartAt = (raceState.scheduledStartAt as string | undefined) ?? null;
+      
+      const appPasses = passesByApp.get(app.id) || [];
+      const activeTargetIndex = appPasses.length > 0 ? Math.max(...appPasses.map(p => p.checkpointIndex)) + 1 : 0;
+      
+      let elapsedSeconds = null;
+      if (startedAt) {
+        elapsedSeconds = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
+      } else if (appPasses.length > 0) {
+        const startPass = appPasses.find(p => p.checkpointIndex === 0);
+        if (startPass) {
+          elapsedSeconds = Math.floor((Date.now() - new Date(startPass.passedAt).getTime()) / 1000);
+        }
+      }
+
       return {
         raceId: app.raceId,
         boatId: app.boatId,
@@ -117,6 +148,9 @@ export class SailorService {
         raceStartedAt: startedAt,
         scheduledStartAt: scheduledStartAt,
         trackingConfig: resolveTrackingConfig(tracking),
+        passedCheckpoints: appPasses,
+        activeTargetIndex,
+        raceElapsedSeconds: Math.max(0, elapsedSeconds ?? 0) > 0 ? elapsedSeconds : null,
       };
     };
 
@@ -225,6 +259,7 @@ export class SailorService {
         bestPosition,
         avgPosition,
         daysUntilNextRace,
+        totalApplications: applications.length,
       },
       nextRace,
       upcomingRaces: upcoming,
@@ -313,5 +348,98 @@ export class SailorService {
       createdAt: app.createdAt.toISOString(),
       checkedInAt: app.checkedInAt ? app.checkedInAt.toISOString() : null,
     }));
+  }
+
+  async getRaceLeaderboard(raceId: string, user: SessionUser) {
+    // Verify the requesting user participated in this race (or is admin/committee)
+    const email = user.email.toLowerCase();
+    const myApp = await this.applicationsRepo.findOne({
+      where: { raceId, email },
+    });
+
+    // Allow access only if the user participated OR has elevated role
+    const allowedRoles = ['ADMIN', 'COMMITTEE'];
+    if (!myApp && !allowedRoles.includes(user.role)) {
+      return { leaderboard: [], raceId, total: 0 };
+    }
+
+    // Get all applications for this race
+    const applications = await this.applicationsRepo.find({
+      where: { raceId },
+      relations: ['race'],
+      order: { finishPosition: 'ASC', createdAt: 'ASC' },
+    });
+
+    if (applications.length === 0) {
+      return { leaderboard: [], raceId, total: 0 };
+    }
+
+    // Get all checkpoint passes for this race to compute elapsed times
+    const allPasses = await this.checkpointPassRepo.find({
+      where: { raceId },
+      order: { checkpointIndex: 'ASC' },
+    });
+
+    const passesByApp = new Map<string, typeof allPasses>();
+    for (const pass of allPasses) {
+      if (!passesByApp.has(pass.applicationId)) {
+        passesByApp.set(pass.applicationId, []);
+      }
+      passesByApp.get(pass.applicationId)!.push(pass);
+    }
+
+    const race = applications[0]?.race;
+    const totalCheckpoints = (race?.course as any)?.checkpoints?.length ?? 0;
+
+    const leaderboard = applications.map((app, index) => {
+      const appPasses = passesByApp.get(app.id) ?? [];
+      const lastPass = appPasses.length > 0
+        ? appPasses.reduce((latest, p) => (p.checkpointIndex > latest.checkpointIndex ? p : latest), appPasses[0])
+        : null;
+      const totalElapsedSeconds = lastPass?.elapsedSeconds ?? null;
+      const checkpointsReached = appPasses.length;
+      const isFinished = totalCheckpoints > 0 && checkpointsReached >= totalCheckpoints;
+
+      // Assign display position: use stored finishPosition or fallback to array index
+      const displayPosition = app.finishPosition ?? (index + 1);
+
+      return {
+        rank: displayPosition,
+        applicationId: app.id,
+        name: app.name,
+        boatName: app.boatName,
+        sailNumber: app.sailNumber,
+        club: app.club,
+        finishPosition: app.finishPosition,
+        fleetSize: app.fleetSize,
+        totalElapsedSeconds,
+        checkpointsReached,
+        totalCheckpoints,
+        isFinished,
+        status: app.status,
+        isMe: app.email === email,
+      };
+    });
+
+    // Sort: finished entries by finishPosition ASC, then DNF/pending at the bottom
+    leaderboard.sort((a, b) => {
+      if (a.finishPosition != null && b.finishPosition != null) return a.finishPosition - b.finishPosition;
+      if (a.finishPosition != null) return -1;
+      if (b.finishPosition != null) return 1;
+      // Both unranked — sort by checkpoints reached desc
+      return b.checkpointsReached - a.checkpointsReached;
+    });
+
+    // Re-assign visual rank after sort
+    leaderboard.forEach((entry, i) => {
+      entry.rank = i + 1;
+    });
+
+    return {
+      raceId,
+      raceTitle: race?.title ?? '',
+      total: leaderboard.length,
+      leaderboard,
+    };
   }
 }

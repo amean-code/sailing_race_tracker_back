@@ -18,6 +18,13 @@ type JwtPayload = {
   status?: string;
 };
 
+/** Short-lived in-memory user cache to avoid a DB hit on every authenticated request.
+ *  Entries expire after USER_CACHE_TTL_MS milliseconds, so status changes propagate quickly. */
+const USER_CACHE_TTL_MS = 10_000; // 10 seconds
+
+type CachedUser = { user: SessionUser; expiresAt: number };
+const userCache = new Map<string, CachedUser>();
+
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
@@ -38,14 +45,23 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!payload.sub || !payload.email) {
       throw new UnauthorizedException('Yetkisiz erişim');
     }
+
+    // Return cached session user if still valid
+    const cached = userCache.get(payload.sub);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.user;
+    }
+
     const user = await this.usersRepo.findOne({
       where: { id: payload.sub },
       select: ['id', 'email', 'name', 'role', 'status'],
     });
     if (!user) {
+      userCache.delete(payload.sub);
       throw new UnauthorizedException('Yetkisiz erişim');
     }
     if (user.status !== UserStatusEnum.APPROVED) {
+      userCache.delete(payload.sub);
       throw new UnauthorizedException(
         user.status === UserStatusEnum.PENDING
           ? 'Hesabınız yönetici onayı bekliyor.'
@@ -54,12 +70,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             : 'Hesabınız askıya alındı. Lütfen yönetici ile iletişime geçin.',
       );
     }
-    return {
+
+    const sessionUser: SessionUser = {
       sub: user.id,
       email: user.email,
       role: user.role,
       name: user.name,
       status: user.status,
     };
+
+    // Cache the resolved user for a short TTL to eliminate duplicate DB lookups
+    // within the same page-load burst of parallel requests.
+    userCache.set(payload.sub, { user: sessionUser, expiresAt: Date.now() + USER_CACHE_TTL_MS });
+
+    return sessionUser;
   }
 }

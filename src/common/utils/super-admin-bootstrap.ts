@@ -32,19 +32,13 @@ export async function syncSuperAdmins(userRepo: Repository<User>, logger: LogLik
 
   for (const seed of SUPER_ADMIN_SEEDS) {
     const existing = await userRepo.findOne({ where: { email: seed.email } });
-    const passwordHash = await bcrypt.hash(seed.password, 12);
 
     if (existing) {
-      existing.passwordHash = passwordHash;
-      existing.role = UserRoleEnum.SUPER_ADMIN;
-      existing.status = UserStatusEnum.APPROVED;
-      existing.name = seed.name;
-      existing.phone = existing.phone ?? null;
-      await userRepo.save(existing);
-      logger.log?.(`Ensured super admin ${seed.email}`);
+      // User already exists — skip all updates. No password re-hash, no UPDATE query.
       continue;
     }
 
+    const passwordHash = await bcrypt.hash(seed.password, 12);
     await userRepo.save(
       userRepo.create({
         email: seed.email,
