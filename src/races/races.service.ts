@@ -113,16 +113,6 @@ export class RacesService {
       raceState: dto.raceState ?? {},
       createdById,
     });
-    if (race.courseId && (race.status === RaceStatusEnum.OPEN || race.status === RaceStatusEnum.IN_PROGRESS)) {
-      const course = await this.coursesRepo.findOne({ where: { id: race.courseId } });
-      if (course && course.status !== CourseStatusEnum.APPROVED && course.status !== CourseStatusEnum.ACTIVE) {
-        if (dto.status === RaceStatusEnum.OPEN || dto.status === RaceStatusEnum.IN_PROGRESS) {
-          throw new BadRequestException('Seçilen parkur henüz onaylanmamış. Parkur onaylanmadan yarışı başvuruya açamazsınız.');
-        } else {
-          race.status = RaceStatusEnum.DRAFT;
-        }
-      }
-    }
 
     const saved = await this.racesRepo.save(race);
     const result = await this.findOne(saved.id);
@@ -183,8 +173,15 @@ export class RacesService {
     const race = await this.racesRepo.findOne({ where: { id } });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
-    if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
-      throw new ForbiddenException('Sadece kendi oluşturduğunuz yarışı düzenleyebilirsiniz.');
+    const isDemoRace = race.title === 'DEMO TEST RACE';
+
+    if (!isDemoRace) {
+      if (!user || !['COMMITTEE', 'ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
+        throw new ForbiddenException('Bu işlem için yetkiniz yok');
+      }
+      if (user.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
+        throw new ForbiddenException('Sadece kendi oluşturduğunuz yarışı düzenleyebilirsiniz.');
+      }
     }
 
     const previousStatus = race.status;
@@ -227,16 +224,6 @@ export class RacesService {
       race.raceState = { ...(race.raceState ?? {}), ...(dto.raceState ?? {}) };
     }
 
-    if (race.courseId && (race.status === RaceStatusEnum.OPEN || race.status === RaceStatusEnum.IN_PROGRESS)) {
-      const course = await this.coursesRepo.findOne({ where: { id: race.courseId } });
-      if (course && course.status !== CourseStatusEnum.APPROVED && course.status !== CourseStatusEnum.ACTIVE) {
-        if (dto.status === RaceStatusEnum.OPEN || dto.status === RaceStatusEnum.IN_PROGRESS) {
-          throw new BadRequestException('Seçilen parkur henüz onaylanmamış. Parkur onaylanmadan yarışı başvuruya açamazsınız.');
-        } else {
-          race.status = RaceStatusEnum.DRAFT;
-        }
-      }
-    }
 
     const saved = await this.racesRepo.save(race);
     const result = await this.findOne(saved.id);
@@ -418,7 +405,7 @@ export class RacesService {
   }
 
   async getStandings(raceId: string, user?: SessionUser) {
-    const race = await this.racesRepo.findOne({ where: { id: raceId } });
+    const race = await this.racesRepo.findOne({ where: { id: raceId }, relations: ['course'] });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
     if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
@@ -431,13 +418,11 @@ export class RacesService {
       order: { createdAt: 'ASC' },
     });
 
-    // Get latest checkpoint pass per application
     const passes = await this.checkpointPassRepo.find({
       where: { raceId },
       order: { checkpointIndex: 'DESC', passedAt: 'ASC' },
     });
 
-    // Build a map: applicationId -> best pass (latest checkpoint)
     const bestPassByApp = new Map<string, CheckpointPass>();
     for (const p of passes) {
       const existing = bestPassByApp.get(p.applicationId);
@@ -446,7 +431,6 @@ export class RacesService {
       }
     }
 
-    // Get all passes for computing segment times
     const allPassesByApp = new Map<string, CheckpointPass[]>();
     for (const p of passes) {
       if (!allPassesByApp.has(p.applicationId)) allPassesByApp.set(p.applicationId, []);
@@ -454,6 +438,16 @@ export class RacesService {
     }
 
     const raceStartedAt = race.raceState?.startedAt as string | undefined;
+
+    let finishIndex = -1;
+    if (race.course?.checkpoints) {
+      const checkpoints = race.course.checkpoints as any[];
+      const targets = checkpoints.filter(cp => {
+        const k = cp.kind || cp.type;
+        return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
+      });
+      finishIndex = targets.length - 1;
+    }
 
     const standings = applications.map((app) => {
       const best = bestPassByApp.get(app.id) ?? null;
@@ -463,6 +457,8 @@ export class RacesService {
       const elapsedNow = raceStartedAt
         ? Math.floor((Date.now() - new Date(raceStartedAt).getTime()) / 1000)
         : null;
+
+      const isFinished = best?.checkpointIndex === finishIndex && finishIndex !== -1;
 
       return {
         applicationId: app.id,
@@ -484,6 +480,7 @@ export class RacesService {
         })),
         status: app.status,
         finishPosition: app.finishPosition,
+        finished: isFinished,
       };
     });
 

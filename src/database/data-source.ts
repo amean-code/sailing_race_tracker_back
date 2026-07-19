@@ -12,6 +12,9 @@ import {
   NotificationRule,
   NotificationLog,
   SignalFlagCatalogEntity,
+  CheckpointPass,
+  WebhookSubscription,
+  AuditLog,
 } from '../entities';
 
 export const AppDataSource = new DataSource({
@@ -28,6 +31,9 @@ export const AppDataSource = new DataSource({
     NotificationRule,
     NotificationLog,
     SignalFlagCatalogEntity,
+    CheckpointPass,
+    WebhookSubscription,
+    AuditLog,
   ],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: true,

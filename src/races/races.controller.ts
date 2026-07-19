@@ -99,7 +99,6 @@ export class RacesController {
 
   @Patch(':id')
   @ApiCookieAuth(AUTH_COOKIE)
-  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yarış güncelle' })
   async update(
     @Param('id') id: string,

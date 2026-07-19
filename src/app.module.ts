@@ -38,6 +38,7 @@ import { RaceEngineModule } from './race-engine/race-engine.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { TelemetryModule } from './telemetry/telemetry.module';
+import { DemoTestModule } from './demo-test/demo-test.module';
 
 @Module({
   imports: [
@@ -86,6 +87,7 @@ import { TelemetryModule } from './telemetry/telemetry.module';
     WebhooksModule,
     AuditLogsModule,
     TelemetryModule,
+    DemoTestModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
