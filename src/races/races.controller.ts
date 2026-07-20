@@ -62,6 +62,15 @@ export class RacesController {
     return this.raceFleetService.getCompetitors(id);
   }
 
+  @Get(':id/live-trails')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Canlı takip için geçmiş rotalar (startı geçenler)' })
+  async getLiveTrails(@Param('id') id: string) {
+    const trails = await this.racesService.getLiveTrails(id);
+    return { trails };
+  }
+
   @Post(':id/check-in')
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')

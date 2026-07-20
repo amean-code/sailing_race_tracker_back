@@ -118,22 +118,16 @@ export class RaceEngineService {
         ]);
         const intersects = turf.lineIntersect(boatPath, targetLine);
         if (intersects.features.length > 0) {
-          // Yön kontrolü (Kapıdan doğru yönde geçiş)
-          // Gate vektörü: coords[0] (İskele) -> coords[1] (Sancak)
           const gx = target.coords[1][1] - target.coords[0][1];
           const gy = target.coords[1][0] - target.coords[0][0];
-          // Tekne vektörü: önceki konum -> şimdiki konum
           const bx = lng - previousState.lng;
           const by = lat - previousState.lat;
-          
-          // Vektörel çarpım (Z ekseni). Eğer İskele solda, Sancak sağda kalacak şekilde 
-          // geçiliyorsa, (gx * by - gy * bx) > 0 olmalıdır.
           const crossZ = gx * by - gy * bx;
           
-          if (crossZ > 0) {
-            isCrossed = true;
-          } else {
-            this.logger.debug(`Boat ${boatId} crossed line ${activeTargetIndex} from wrong direction (backward)`);
+          isCrossed = true;
+          
+          if (crossZ <= 0) {
+            this.logger.debug(`Boat ${boatId} crossed line ${activeTargetIndex} from reverse direction relative to line drawing.`);
           }
         }
       }

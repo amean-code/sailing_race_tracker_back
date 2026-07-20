@@ -728,9 +728,70 @@ export class RacesService {
 
     const applications = await this.applicationsRepo.find({
       where: { raceId },
-      select: ['boatId', 'boatName', 'sailNumber'],
+      select: ['id', 'boatId', 'boatName', 'sailNumber'],
     });
 
-    return { trackPoints, applications };
+    const startPasses = await this.checkpointPassRepo.find({
+      where: { raceId, checkpointIndex: 0 },
+      select: ['applicationId', 'passedAt'],
+    });
+
+    const startTimes: Record<string, number> = {};
+    startPasses.forEach((p) => {
+      const app = applications.find((a) => a.id === p.applicationId);
+      if (app?.boatId) {
+        startTimes[app.boatId] = p.passedAt.getTime();
+      }
+    });
+
+    return { trackPoints, applications, startTimes };
+  }
+
+  async getLiveTrails(raceId: string) {
+    const race = await this.racesRepo.findOne({ where: { id: raceId } });
+    if (!race) throw new NotFoundException('Yarış bulunamadı');
+
+    const applications = await this.applicationsRepo.find({
+      where: { raceId, status: 'checked_in' },
+      select: ['id', 'boatId'],
+    });
+
+    const startPasses = await this.checkpointPassRepo.find({
+      where: { raceId, checkpointIndex: 0 },
+      select: ['applicationId', 'passedAt'],
+    });
+
+    const startTimes: Record<string, number> = {};
+    startPasses.forEach((p) => {
+      const app = applications.find((a) => a.id === p.applicationId);
+      if (app?.boatId) {
+        startTimes[app.boatId] = p.passedAt.getTime();
+      }
+    });
+
+    const boatIdsWithStart = Object.keys(startTimes);
+    if (boatIdsWithStart.length === 0) {
+      return {};
+    }
+
+    const trackPoints = await this.trackPointsRepo.find({
+      where: { raceId, boatId: In(boatIdsWithStart) },
+      order: { recordedAt: 'ASC' },
+      select: ['boatId', 'lat', 'lng', 'recordedAt'],
+    });
+
+    const trails: Record<string, [number, number][]> = {};
+
+    trackPoints.forEach(tp => {
+      const startTime = startTimes[tp.boatId];
+      if (startTime && tp.recordedAt.getTime() >= startTime) {
+        if (!trails[tp.boatId]) {
+          trails[tp.boatId] = [];
+        }
+        trails[tp.boatId].push([tp.lng, tp.lat]);
+      }
+    });
+
+    return trails;
   }
 }
