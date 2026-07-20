@@ -11,3 +11,4 @@ export { SignalFlagCatalogEntity } from './signal-flag-catalog.entity';
 export { WebhookSubscription } from './webhook-subscription.entity';
 export { CheckpointPass } from './checkpoint-pass.entity';
 export { AuditLog } from './audit-log.entity';
+export { Setting } from './setting.entity';

@@ -47,8 +47,15 @@ export class User {
   @OneToMany(() => Boat, (boat) => boat.user)
   boats!: Boat[];
 
+  @Column({ name: 'receive_emails', default: true })
+  receiveEmails!: boolean;
+
+  @Column({ name: 'unsubscribe_token', type: 'text', nullable: true })
+  unsubscribeToken!: string | null;
+
   @BeforeInsert()
   generateId() {
     if (!this.id) this.id = uuidv4();
+    if (!this.unsubscribeToken) this.unsubscribeToken = uuidv4();
   }
 }

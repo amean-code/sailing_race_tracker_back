@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
@@ -25,9 +26,11 @@ export interface NotificationRecipient {
   email?: string | null;
   phone?: string | null;
   name?: string | null;
+  unsubscribeToken?: string | null;
 }
 
 export interface NotificationContext {
+  raceId?: string;
   raceTitle?: string;
   raceLocation?: string;
   raceStatus?: string;
@@ -51,6 +54,7 @@ export class NotificationsService {
     private readonly usersRepo: Repository<User>,
     private readonly mailService: MailService,
     private readonly whatsAppService: WhatsAppService,
+    private readonly configService: ConfigService,
   ) {}
 
   private maskSecret(value: string | null | undefined) {
@@ -195,38 +199,132 @@ export class NotificationsService {
     return this.whatsAppService.testConnection(dto.phone, dto.message);
   }
 
+  private buildHtmlTemplate(title: string, contentHtml: string, recipient: NotificationRecipient, frontendUrl: string): string {
+    const unsubscribeLink = recipient.unsubscribeToken 
+      ? `<div style="margin-top: 40px; text-align: center; font-size: 12px; color: #888;">Eğer bu tür e-postaları almak istemiyorsanız <a href="${frontendUrl}/unsubscribe?token=${recipient.unsubscribeToken}" style="color: #666; text-decoration: underline;">tıklayın</a>.</div>`
+      : '';
+
+    return `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 12px;">
+        <div style="background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+          <h2 style="color: #1e40af; margin-top: 0; text-align: center;">${title}</h2>
+          ${contentHtml}
+          <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; text-align: center;">
+            <p style="color: #6b7280; font-size: 14px; margin-bottom: 0;">Detaylar için <a href="${frontendUrl}" style="color: #2563eb; text-decoration: none; font-weight: bold;">Themis Race Tracker</a>'ı ziyaret edin.</p>
+          </div>
+        </div>
+        ${unsubscribeLink}
+      </div>
+    `;
+  }
+
   private buildMessage(event: NotificationEventEnum, ctx: NotificationContext) {
     const race = ctx.raceTitle ? `"${ctx.raceTitle}"` : 'Yarış';
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
+    
     switch (event) {
       case NotificationEventEnum.APPLICATION_SUBMITTED:
         return {
           subject: `Başvuru alındı — ${ctx.raceTitle ?? 'Yarış'}`,
           text: `Merhaba ${ctx.applicantName ?? ''},\n\n${race} yarışına başvurunuz alındı.\nTekne: ${ctx.boatName ?? '-'} #${ctx.sailNumber ?? '-'}\n\nThemis Race Tracker`,
+          htmlBuilder: (recipient: NotificationRecipient) => {
+            const content = `
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;">Merhaba ${ctx.applicantName || recipient.name || ''},</p>
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;"><strong>${race}</strong> yarışına başvurunuz başarıyla alındı.</p>
+              <div style="background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                <p style="margin: 0 0 8px 0; color: #4b5563;"><strong>Tekne:</strong> ${ctx.boatName ?? '-'}</p>
+                <p style="margin: 0; color: #4b5563;"><strong>Yelken No:</strong> ${ctx.sailNumber ?? '-'}</p>
+              </div>
+            `;
+            return this.buildHtmlTemplate('Başvuru Alındı', content, recipient, frontendUrl);
+          }
         };
-      case NotificationEventEnum.RACE_CREATED:
+      case NotificationEventEnum.RACE_CREATED: {
+        const text = `Yeni bir yarış yayınlandı: ${race}\nKonum: ${ctx.raceLocation ?? '-'}\n\nKayıt için Themis Race Tracker'ı ziyaret edin.`;
         return {
           subject: `Yeni yarış duyurusu — ${ctx.raceTitle ?? ''}`,
-          text: `Yeni bir yarış yayınlandı: ${race}\nKonum: ${ctx.raceLocation ?? '-'}\n\nKayıt için Themis Race Tracker'ı ziyaret edin.`,
+          text,
+          htmlBuilder: (recipient: NotificationRecipient) => {
+            const applyButton = ctx.raceStatus === 'REGISTRATION_OPEN' && ctx.raceId
+              ? `<div style="text-align: center; margin: 30px 0;"><a href="${frontendUrl}/panel/sailor/races" style="background-color: #2563eb; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Hemen Başvur</a></div>`
+              : '';
+
+            const content = `
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;">Merhaba,</p>
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;"><strong>${race}</strong> yarışı sistemde yayınlandı ve detaylar açıklandı.</p>
+              <div style="background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                <p style="margin: 0; color: #4b5563;"><strong>Konum:</strong> ${ctx.raceLocation ?? '-'}</p>
+                <p style="margin: 8px 0 0 0; color: #4b5563;"><strong>Durum:</strong> Kayıtlar Açık</p>
+              </div>
+              ${applyButton}
+            `;
+            return this.buildHtmlTemplate('Yeni Yarış Duyurusu!', content, recipient, frontendUrl);
+          }
         };
+      }
       case NotificationEventEnum.RACE_UPDATED:
         return {
           subject: `Yarış güncellendi — ${ctx.raceTitle ?? ''}`,
           text: `${race} yarış bilgileri güncellendi. Detaylar için Themis Race Tracker'ı kontrol edin.`,
+          htmlBuilder: (recipient: NotificationRecipient) => {
+            const content = `
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;">Merhaba,</p>
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;">Kayıtlı olduğunuz veya takip ettiğiniz <strong>${race}</strong> yarışının bilgileri komite tarafından güncellendi.</p>
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;">Lütfen güncel bilgileri sistem üzerinden kontrol ediniz.</p>
+            `;
+            return this.buildHtmlTemplate('Yarış Bilgileri Güncellendi', content, recipient, frontendUrl);
+          }
         };
       case NotificationEventEnum.RACE_STATUS_CHANGED:
         return {
           subject: `Kayıt durumu değişti — ${ctx.raceTitle ?? ''}`,
           text: `${race} yarışının kayıt durumu: ${ctx.raceStatus ?? 'güncellendi'}.\n\nThemis Race Tracker`,
+          htmlBuilder: (recipient: NotificationRecipient) => {
+            const statusMap: Record<string, string> = {
+              'REGISTRATION_OPEN': 'Kayıtlar Açıldı',
+              'REGISTRATION_CLOSED': 'Kayıtlar Kapandı',
+              'IN_PROGRESS': 'Yarış Başladı',
+              'FINISHED': 'Yarış Tamamlandı',
+              'SUSPENDED': 'Yarış Askıya Alındı'
+            };
+            const readableStatus = ctx.raceStatus ? (statusMap[ctx.raceStatus] || ctx.raceStatus) : 'Güncellendi';
+            const content = `
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;">Merhaba,</p>
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;"><strong>${race}</strong> yarışının durumu güncellendi.</p>
+              <div style="background-color: #f0fdf4; border-left: 4px solid #16a34a; padding: 15px; border-radius: 0 6px 6px 0; margin: 20px 0;">
+                <p style="margin: 0; color: #166534; font-size: 18px; font-weight: bold;">Yeni Durum: ${readableStatus}</p>
+              </div>
+            `;
+            return this.buildHtmlTemplate('Yarış Durumu Değişti', content, recipient, frontendUrl);
+          }
         };
       case NotificationEventEnum.RACE_DELETED:
         return {
           subject: `Yarış iptal edildi — ${ctx.raceTitle ?? ''}`,
           text: `${race} yarışı sistemden kaldırıldı.`,
+          htmlBuilder: (recipient: NotificationRecipient) => {
+            const content = `
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;">Merhaba,</p>
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;">Maalesef <strong>${race}</strong> yarışı komite tarafından iptal edilmiş veya sistemden kaldırılmıştır.</p>
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;">Bu yarış ile ilgili başvurular da geçersiz sayılacaktır.</p>
+            `;
+            return this.buildHtmlTemplate('Yarış İptal Edildi', content, recipient, frontendUrl);
+          }
         };
       case NotificationEventEnum.USER_REGISTERED:
         return {
           subject: `Yeni kullanıcı kaydı — ${ctx.userName ?? ctx.userEmail ?? ''}`,
           text: `Yeni kullanıcı kaydı: ${ctx.userName ?? '-'} (${ctx.userEmail ?? '-'})\n\nThemis Race Tracker`,
+          htmlBuilder: (recipient: NotificationRecipient) => {
+            const content = `
+              <p style="color: #374151; font-size: 16px; line-height: 1.5;">Sisteme yeni bir kullanıcı kayıt oldu.</p>
+              <div style="background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                <p style="margin: 0 0 8px 0; color: #4b5563;"><strong>İsim:</strong> ${ctx.userName ?? '-'}</p>
+                <p style="margin: 0; color: #4b5563;"><strong>E-posta:</strong> ${ctx.userEmail ?? '-'}</p>
+              </div>
+            `;
+            return this.buildHtmlTemplate('Yeni Kullanıcı Kaydı', content, recipient, frontendUrl);
+          }
         };
       default:
         return { subject: 'Themis Race Tracker Bildirimi', text: 'Yeni bir bildiriminiz var.' };
@@ -251,10 +349,15 @@ export class NotificationsService {
     if (!role) return [];
 
     const users = await this.usersRepo.find({
-      where: { role },
-      select: ['email', 'phone', 'name'],
+      where: { role, receiveEmails: true },
+      select: ['email', 'phone', 'name', 'unsubscribeToken'],
     });
-    return users.map((u) => ({ email: u.email, phone: u.phone, name: u.name }));
+    return users.map((u) => ({
+      email: u.email,
+      phone: u.phone,
+      name: u.name,
+      unsubscribeToken: u.unsubscribeToken,
+    }));
   }
 
   private async logDelivery(
@@ -285,13 +388,14 @@ export class NotificationsService {
     applicant?: NotificationRecipient,
   ) {
     const rules = await this.rulesRepo.find({ where: { event, enabled: true } });
-    const { subject, text } = this.buildMessage(event, context);
+    const { subject, text, htmlBuilder } = this.buildMessage(event, context);
 
     for (const rule of rules) {
       const recipients = await this.resolveRecipients(rule.audience, applicant);
       for (const recipient of recipients) {
         if (rule.emailEnabled && recipient.email) {
-          const result = await this.mailService.sendMail(recipient.email, subject, text);
+          const html = htmlBuilder ? htmlBuilder(recipient) : undefined;
+          const result = await this.mailService.sendMail(recipient.email, subject, text, html);
           await this.logDelivery(
             event,
             rule.audience,
@@ -321,6 +425,24 @@ export class NotificationsService {
         }
       }
     }
+  }
+
+  async getUnsubscribeStatus(token: string) {
+    const user = await this.usersRepo.findOne({ where: { unsubscribeToken: token } });
+    if (!user) {
+      return { found: false };
+    }
+    return { found: true, receiveEmails: user.receiveEmails, email: user.email };
+  }
+
+  async toggleUnsubscribe(token: string, receiveEmails: boolean) {
+    const user = await this.usersRepo.findOne({ where: { unsubscribeToken: token } });
+    if (!user) {
+      return { success: false, error: 'User not found' };
+    }
+    user.receiveEmails = receiveEmails;
+    await this.usersRepo.save(user);
+    return { success: true, receiveEmails: user.receiveEmails };
   }
 
   dispatchAsync(

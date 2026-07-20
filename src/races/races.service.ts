@@ -12,6 +12,7 @@ import { Course } from '../entities/course.entity';
 import { User } from '../entities/user.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
+import { TrackPoint } from '../entities/track-point.entity';
 import { RaceStatusEnum, NotificationEventEnum, CourseStatusEnum, UserRoleEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
 import { serializeRace, RaceLike } from '../common/utils/serialize-race';
@@ -37,6 +38,8 @@ export class RacesService {
     private readonly checkpointPassRepo: Repository<CheckpointPass>,
     @InjectRepository(Course)
     private readonly coursesRepo: Repository<Course>,
+    @InjectRepository(TrackPoint)
+    private readonly trackPointsRepo: Repository<TrackPoint>,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
     private readonly notificationsService: NotificationsService,
@@ -117,6 +120,7 @@ export class RacesService {
     const saved = await this.racesRepo.save(race);
     const result = await this.findOne(saved.id);
     this.notificationsService.dispatchAsync(NotificationEventEnum.RACE_CREATED, {
+      raceId: saved.id,
       raceTitle: saved.title,
       raceLocation: saved.location,
       raceStatus: saved.status,
@@ -224,6 +228,12 @@ export class RacesService {
       race.raceState = { ...(race.raceState ?? {}), ...(dto.raceState ?? {}) };
     }
 
+    if (race.status === RaceStatusEnum.IN_PROGRESS && !race.courseSnapshot && race.courseId) {
+      const courseForSnapshot = await this.coursesRepo.findOne({ where: { id: race.courseId } });
+      if (courseForSnapshot) {
+        race.courseSnapshot = JSON.parse(JSON.stringify(courseForSnapshot));
+      }
+    }
 
     const saved = await this.racesRepo.save(race);
     const result = await this.findOne(saved.id);
@@ -595,42 +605,86 @@ export class RacesService {
   }
 
   private async sendResultsEmail(race: Race, referee: User, rankedApps: any[]) {
-    let html = `<div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">`;
-    html += `<h2 style="color: #1e293b;">${race.title} - Kesinleşen Yarış Sonuçları</h2>`;
-    html += `<p style="color: #475569; font-size: 15px;">Merhaba ${referee.name || 'Hakem'},</p>`;
-    html += `<p style="color: #475569; font-size: 15px;">Yönettiğiniz yarış başarıyla tamamlandı. Aşağıda kesinleşen yarış sonuç tablosunu bulabilirsiniz:</p>`;
-    html += `<table style="width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px;">
-      <thead>
-        <tr style="background-color: #f8fafc; text-align: left;">
-          <th style="padding: 12px; border-bottom: 2px solid #e2e8f0;">Sıra</th>
-          <th style="padding: 12px; border-bottom: 2px solid #e2e8f0;">Tekne</th>
-          <th style="padding: 12px; border-bottom: 2px solid #e2e8f0;">Yarışmacı</th>
-          <th style="padding: 12px; border-bottom: 2px solid #e2e8f0;">Durum</th>
-          <th style="padding: 12px; border-bottom: 2px solid #e2e8f0;">Süre</th>
-        </tr>
-      </thead>
-      <tbody>`;
-    
-    for (const item of rankedApps) {
-      const statusText = item.finished ? 'Bitti' : 'DNF';
-      const timeText = item.finished ? `${item.finishElapsed} sn` : '-';
-      html += `<tr>
-        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">#${item.app.finishPosition}</td>
-        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${item.app.boatName || '-'}</td>
-        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${item.app.name || '-'}</td>
-        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${statusText}</td>
-        <td style="padding: 12px; border-bottom: 1px solid #e2e8f0;">${timeText}</td>
-      </tr>`;
-    }
-    
-    html += `</tbody></table>`;
-    html += `<p style="color: #64748b; font-size: 13px; margin-top: 30px;">Themis Race Tracker Otomatik Bilgilendirme Sistemi</p>`;
-    html += `</div>`;
+    const top3 = rankedApps.slice(0, 3).filter(item => item.finished);
+
+    let html = `
+    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.08); border: 1px solid #e2e8f0;">
+      <!-- Header -->
+      <div style="background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 35px 20px; text-align: center;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.5px;">⛵ ${race.title}</h1>
+        <p style="color: #bfdbfe; margin: 10px 0 0 0; font-size: 16px; font-weight: 500;">Yarış Sonuçları Kesinleşti</p>
+      </div>
+      
+      <!-- Body -->
+      <div style="padding: 35px 30px;">
+        <p style="color: #334155; font-size: 16px; line-height: 1.6; margin-top: 0;">Sayın <strong>${referee.name || 'Hakem'}</strong>,</p>
+        <p style="color: #475569; font-size: 15px; line-height: 1.6;">Yönetmekte olduğunuz yarış başarıyla sonlandırılmıştır. Aşağıda yarışa ait kesinleşen sıralama detaylarını bulabilirsiniz:</p>
+        
+        <!-- Top 3 Podium -->
+        ${top3.length > 0 ? `
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px 25px; margin: 25px 0;">
+          <h3 style="color: #0f172a; font-size: 17px; margin: 0 0 15px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">🏆 Dereceye Girenler</h3>
+          <ul style="list-style: none; padding: 0; margin: 0;">
+            ${top3.map((item, index) => {
+              const medalColors = ['#d97706', '#64748b', '#b45309']; // Gold, Silver, Bronze
+              const color = medalColors[index] || '#334155';
+              return `
+                <li style="padding: 10px 0; border-bottom: ${index === top3.length - 1 ? 'none' : '1px solid #e2e8f0'}; color: #334155; display: flex; align-items: center; font-size: 15px;">
+                  <strong style="color: ${color}; font-size: 18px; margin-right: 10px; min-width: 25px;">${index + 1}.</strong> 
+                  <span style="flex: 1;"><strong>${item.app.boatName || 'Belirtilmedi'}</strong> (${item.app.name || 'İsimsiz'})</span>
+                  <span style="background: #eff6ff; color: #1d4ed8; padding: 4px 10px; border-radius: 20px; font-weight: 600; font-size: 13px;">${item.finishElapsed} sn</span>
+                </li>
+              `;
+            }).join('')}
+          </ul>
+        </div>
+        ` : ''}
+
+        <!-- Full Results Table -->
+        <h3 style="color: #0f172a; font-size: 17px; margin: 30px 0 15px 0;">📋 Tüm Sıralama</h3>
+        <div style="border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px; text-align: left;">
+            <thead>
+              <tr style="background-color: #f1f5f9; color: #475569;">
+                <th style="padding: 14px 16px; font-weight: 600; border-bottom: 2px solid #e2e8f0;">Sıra</th>
+                <th style="padding: 14px 16px; font-weight: 600; border-bottom: 2px solid #e2e8f0;">Tekne</th>
+                <th style="padding: 14px 16px; font-weight: 600; border-bottom: 2px solid #e2e8f0;">Yarışmacı</th>
+                <th style="padding: 14px 16px; font-weight: 600; border-bottom: 2px solid #e2e8f0; text-align: right;">Süre / Durum</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rankedApps.map((item, index) => {
+                const isEven = index % 2 === 0;
+                const bg = isEven ? '#ffffff' : '#f8fafc';
+                const timeOrStatus = item.finished ? 
+                  `<span style="color: #166534; font-weight: 600;">${item.finishElapsed} sn</span>` : 
+                  `<span style="color: #dc2626; font-weight: 600;">Tamamlayamadı</span>`;
+                
+                return `
+                <tr style="background-color: ${bg}; border-bottom: 1px solid #e2e8f0;">
+                  <td style="padding: 14px 16px; font-weight: bold; color: #334155;">#${item.app.finishPosition}</td>
+                  <td style="padding: 14px 16px; color: #475569;">${item.app.boatName || '—'}</td>
+                  <td style="padding: 14px 16px; color: #475569;">${item.app.name || '—'}</td>
+                  <td style="padding: 14px 16px; text-align: right;">${timeOrStatus}</td>
+                </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+        
+        <!-- Footer -->
+        <div style="margin-top: 40px; padding-top: 25px; border-top: 1px solid #e2e8f0; text-align: center;">
+          <p style="color: #94a3b8; font-size: 13px; margin: 0; line-height: 1.5;">Bu e-posta <strong>Themis Race Tracker</strong> sistemi tarafından otomatik olarak oluşturulmuştur. Lütfen bu mesaja yanıt vermeyiniz.</p>
+        </div>
+      </div>
+    </div>
+    `;
 
     await this.mailService.sendMail(
       referee.email,
-      `${race.title} — Yarış Sonuçları`,
-      'Yarış başarıyla tamamlandı ve sonuçlar kesinleşti. Lütfen e-postayı HTML formatında görüntüleyin.',
+      `${race.title} — Kesinleşen Yarış Sonuçları`,
+      'Yarış başarıyla tamamlandı ve sonuçlar kesinleşti. Lütfen e-postayı HTML destekleyen bir istemcide görüntüleyin.',
       html
     );
   }
@@ -663,5 +717,20 @@ export class RacesService {
     });
 
     return [headers.join(','), ...rows].join('\n');
+  }
+
+  async getPlaybackData(raceId: string) {
+    const trackPoints = await this.trackPointsRepo.find({
+      where: { raceId },
+      order: { recordedAt: 'ASC' },
+      select: ['boatId', 'lat', 'lng', 'heading', 'speed', 'recordedAt'],
+    });
+
+    const applications = await this.applicationsRepo.find({
+      where: { raceId },
+      select: ['boatId', 'boatName', 'sailNumber'],
+    });
+
+    return { trackPoints, applications };
   }
 }

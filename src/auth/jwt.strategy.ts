@@ -60,14 +60,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       userCache.delete(payload.sub);
       throw new UnauthorizedException('Yetkisiz erişim');
     }
-    if (user.status !== UserStatusEnum.APPROVED) {
+    if (user.status === UserStatusEnum.REJECTED || user.status === UserStatusEnum.SUSPENDED) {
       userCache.delete(payload.sub);
       throw new UnauthorizedException(
-        user.status === UserStatusEnum.PENDING
-          ? 'Hesabınız yönetici onayı bekliyor.'
-          : user.status === UserStatusEnum.REJECTED
-            ? 'Hesabınız reddedildi. Lütfen yönetici ile iletişime geçin.'
-            : 'Hesabınız askıya alındı. Lütfen yönetici ile iletişime geçin.',
+        user.status === UserStatusEnum.REJECTED
+          ? 'Hesabınız reddedildi. Lütfen yönetici ile iletişime geçin.'
+          : 'Hesabınız askıya alındı. Lütfen yönetici ile iletişime geçin.',
       );
     }
 

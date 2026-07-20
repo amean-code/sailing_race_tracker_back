@@ -6,6 +6,7 @@ import { Boat } from '../entities/boat.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
 import { Course } from '../entities/course.entity';
 import { User } from '../entities/user.entity';
+import { TrackPoint } from '../entities/track-point.entity';
 import { RacesService } from './races.service';
 import { RaceFleetService } from './race-fleet.service';
 import { RacesController } from './races.controller';
@@ -14,7 +15,7 @@ import { TrackPointsModule } from '../track-points/track-points.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Race, RaceApplication, Boat, CheckpointPass, Course, User]),
+    TypeOrmModule.forFeature([Race, RaceApplication, Boat, CheckpointPass, Course, User, TrackPoint]),
     NotificationsModule,
     TrackPointsModule,
   ],

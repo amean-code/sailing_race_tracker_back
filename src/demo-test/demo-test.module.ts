@@ -9,6 +9,7 @@ import { TrackPoint } from '../entities/track-point.entity';
 import { AuditLog } from '../entities/audit-log.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
 import { User } from '../entities/user.entity';
+import { TrackPointsModule } from '../track-points/track-points.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { User } from '../entities/user.entity';
       CheckpointPass,
       User
     ]),
+    TrackPointsModule,
   ],
   controllers: [DemoTestController],
 })

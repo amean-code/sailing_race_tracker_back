@@ -18,6 +18,7 @@ import {
   CheckpointPass,
   WebhookSubscription,
   AuditLog,
+  Setting,
 } from './entities';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
@@ -39,6 +40,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { TelemetryModule } from './telemetry/telemetry.module';
 import { DemoTestModule } from './demo-test/demo-test.module';
+import { SettingsModule } from './settings/settings.module';
 
 @Module({
   imports: [
@@ -64,8 +66,9 @@ import { DemoTestModule } from './demo-test/demo-test.module';
           CheckpointPass,
           WebhookSubscription,
           AuditLog,
+          Setting,
         ],
-        synchronize: false,
+        synchronize: true,
         logging: process.env.NODE_ENV === 'production' ? false : ['query', 'error'],
         migrations: ['dist/database/migrations/*.js'],
         migrationsRun: false,
@@ -88,6 +91,7 @@ import { DemoTestModule } from './demo-test/demo-test.module';
     AuditLogsModule,
     TelemetryModule,
     DemoTestModule,
+    SettingsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

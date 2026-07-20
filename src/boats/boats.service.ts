@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Boat } from '../entities/boat.entity';
+import { RaceApplication } from '../entities/race-application.entity';
 import { CreateBoatDto, UpdateBoatDto } from './dto/boat.dto';
 
 @Injectable()
@@ -9,6 +10,8 @@ export class BoatsService {
   constructor(
     @InjectRepository(Boat)
     private readonly boatsRepo: Repository<Boat>,
+    @InjectRepository(RaceApplication)
+    private readonly applicationsRepo: Repository<RaceApplication>,
   ) {}
 
   serialize(boat: Boat) {
@@ -36,7 +39,7 @@ export class BoatsService {
 
   async findAll(raceId?: string) {
     const boats = await this.boatsRepo.find({
-      where: raceId ? { raceId } : {},
+      where: raceId ? { raceId, isActive: true } : { isActive: true },
       order: { name: 'ASC' },
     });
     return boats.map((b) => this.serialize(b));
@@ -44,7 +47,7 @@ export class BoatsService {
 
   async findByUserId(userId: string) {
     const boats = await this.boatsRepo.find({
-      where: { userId },
+      where: { userId, isActive: true },
       order: { createdAt: 'DESC' },
     });
     return boats.map((b) => this.serialize(b));
@@ -96,8 +99,14 @@ export class BoatsService {
   }
 
   async remove(id: string) {
-    const result = await this.boatsRepo.delete({ id });
-    if (!result.affected) throw new NotFoundException('Tekne bulunamadı');
+    const isUsed = await this.applicationsRepo.count({ where: { boatId: id } });
+    if (isUsed > 0) {
+      const result = await this.boatsRepo.update({ id }, { isActive: false });
+      if (!result.affected) throw new NotFoundException('Tekne bulunamadı');
+    } else {
+      const result = await this.boatsRepo.delete({ id });
+      if (!result.affected) throw new NotFoundException('Tekne bulunamadı');
+    }
     return { ok: true };
   }
 
@@ -105,7 +114,14 @@ export class BoatsService {
     const boat = await this.boatsRepo.findOne({ where: { id } });
     if (!boat) throw new NotFoundException('Tekne bulunamadı');
     if (boat.userId !== userId) throw new ForbiddenException('Bu tekne size ait değil');
-    await this.boatsRepo.remove(boat);
+    
+    const isUsed = await this.applicationsRepo.count({ where: { boatId: id } });
+    if (isUsed > 0) {
+      boat.isActive = false;
+      await this.boatsRepo.save(boat);
+    } else {
+      await this.boatsRepo.remove(boat);
+    }
     return { ok: true };
   }
 }

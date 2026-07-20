@@ -166,7 +166,7 @@ export class SailorService {
   }
 
   async getDashboard(user: SessionUser) {
-    const email = user.email.toLowerCase();
+    const email = user?.email?.toLowerCase() || '';
     const now = new Date();
 
     const applications = await this.applicationsRepo.find({
@@ -352,7 +352,7 @@ export class SailorService {
 
   async getRaceLeaderboard(raceId: string, user: SessionUser) {
     // Verify the requesting user participated in this race (or is admin/committee)
-    const email = user.email.toLowerCase();
+    const email = user?.email?.toLowerCase() || '';
     const myApp = await this.applicationsRepo.findOne({
       where: { raceId, email },
     });

@@ -136,6 +136,12 @@ export class RacesController {
   async getStandings(@Param('id') id: string, @CurrentUser() user: SessionUser) {
     return this.racesService.getStandings(id, user);
   }
+  @Public()
+  @Get(':id/playback-data')
+  @ApiOperation({ summary: 'Yarış tekrar oynatma verileri (TrackPoints)' })
+  async getPlaybackData(@Param('id') id: string) {
+    return this.racesService.getPlaybackData(id);
+  }
 
   @Get(':id/export-results')
   @ApiCookieAuth(AUTH_COOKIE)

@@ -55,10 +55,15 @@ export class RaceEngineService {
 
     // 2. Get Race & Course
     const race = await this.racesRepo.findOne({ where: { id: raceId }, relations: ['course'] });
-    if (!race || !race.course || race.status !== 'IN_PROGRESS') return;
+    if (!race || race.status !== 'IN_PROGRESS') return;
 
-    const course = race.course;
-    const checkpoints = course.checkpoints as any[];
+    let checkpoints: any[] = [];
+    if (race.courseSnapshot && Array.isArray(race.courseSnapshot.checkpoints)) {
+      checkpoints = race.courseSnapshot.checkpoints;
+    } else if (race.course && Array.isArray(race.course.checkpoints)) {
+      checkpoints = race.course.checkpoints as any[];
+    }
+    
     if (!checkpoints || checkpoints.length === 0) return;
 
     const targets = checkpoints.filter((cp) => {
@@ -113,7 +118,23 @@ export class RaceEngineService {
         ]);
         const intersects = turf.lineIntersect(boatPath, targetLine);
         if (intersects.features.length > 0) {
-          isCrossed = true;
+          // Yön kontrolü (Kapıdan doğru yönde geçiş)
+          // Gate vektörü: coords[0] (İskele) -> coords[1] (Sancak)
+          const gx = target.coords[1][1] - target.coords[0][1];
+          const gy = target.coords[1][0] - target.coords[0][0];
+          // Tekne vektörü: önceki konum -> şimdiki konum
+          const bx = lng - previousState.lng;
+          const by = lat - previousState.lat;
+          
+          // Vektörel çarpım (Z ekseni). Eğer İskele solda, Sancak sağda kalacak şekilde 
+          // geçiliyorsa, (gx * by - gy * bx) > 0 olmalıdır.
+          const crossZ = gx * by - gy * bx;
+          
+          if (crossZ > 0) {
+            isCrossed = true;
+          } else {
+            this.logger.debug(`Boat ${boatId} crossed line ${activeTargetIndex} from wrong direction (backward)`);
+          }
         }
       }
     } else if (kind === 'buoy' && target.coord) {
@@ -141,11 +162,11 @@ export class RaceEngineService {
       }
 
       if (rounding === 'port') {
-        hasRoundedCorrectly = (relativeBearing < -135) && (state.closestSide === 'port');
+        hasRoundedCorrectly = (relativeBearing < -90) && (state.closestSide === 'port');
       } else if (rounding === 'starboard') {
-        hasRoundedCorrectly = (relativeBearing > 135) && (state.closestSide === 'starboard');
+        hasRoundedCorrectly = (relativeBearing > 90) && (state.closestSide === 'starboard');
       } else {
-        hasRoundedCorrectly = Math.abs(relativeBearing) > 135;
+        hasRoundedCorrectly = Math.abs(relativeBearing) > 90; // Şamandırayı geçmek (yanından ileri geçiş)
       }
 
       if (state.minDistance < 0.3 && hasRoundedCorrectly) {

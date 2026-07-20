@@ -71,6 +71,9 @@ export class Boat {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt!: Date;
 
+  @Column({ name: 'is_active', default: true })
+  isActive!: boolean;
+
   @ManyToOne(() => User, (user) => user.boats, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'user_id' })
   user!: User | null;

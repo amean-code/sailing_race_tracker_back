@@ -60,6 +60,9 @@ export class Race {
   @Column({ name: 'race_state', type: 'jsonb', default: {} })
   raceState!: Record<string, unknown>;
 
+  @Column({ name: 'course_snapshot', type: 'jsonb', nullable: true })
+  courseSnapshot!: Record<string, unknown> | null;
+
   @Column({ name: 'created_by_id', type: 'text', nullable: true })
   createdById!: string | null;
 

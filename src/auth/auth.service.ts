@@ -91,6 +91,9 @@ export class AuthService {
   }
 
   private assertUserCanAccess(user: User) {
+    if (user.role === UserRoleEnum.SAILOR && user.status === UserStatusEnum.PENDING) {
+      return;
+    }
     if (user.status !== UserStatusEnum.APPROVED) {
       throw new UnauthorizedException(getBlockedAccountMessage(user.status));
     }
@@ -131,7 +134,8 @@ export class AuthService {
       userName: saved.name ?? undefined,
       userEmail: saved.email,
     });
-    return { user: this.toPublicUser(saved), token: saved.status === UserStatusEnum.APPROVED ? this.createToken(saved) : undefined };
+    const canLogin = saved.status === UserStatusEnum.APPROVED || (saved.role === UserRoleEnum.SAILOR && saved.status === UserStatusEnum.PENDING);
+    return { user: this.toPublicUser(saved), token: canLogin ? this.createToken(saved) : undefined };
   }
 
   async login(dto: LoginDto) {
