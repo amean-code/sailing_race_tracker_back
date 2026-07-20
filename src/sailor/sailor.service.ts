@@ -146,6 +146,7 @@ export class SailorService {
         raceTitle: app.race?.title ?? '',
         raceStatus: app.race?.status ?? null,
         raceStartedAt: startedAt,
+        raceFinishedAt: app.race?.raceState?.finishedAt ?? null,
         scheduledStartAt: scheduledStartAt,
         trackingConfig: resolveTrackingConfig(tracking),
         passedCheckpoints: appPasses,
