@@ -47,6 +47,15 @@ export class RaceEngineService {
   }
 
   private async processTrackPoint(raceId: string, boatId: string, lat: number, lng: number, heading: number, recordedAt: string) {
+    // Always update memory state first so we have a valid previousState for line intersection when race starts
+    const previousState = this.boatStates.get(boatId);
+    this.boatStates.set(boatId, {
+      lat,
+      lng,
+      heading,
+      recordedAt,
+    });
+
     // 1. Get Active Race Application
     const app = await this.applicationsRepo.findOne({
       where: { raceId, boatId, status: 'CHECKED_IN' },
@@ -87,15 +96,9 @@ export class RaceEngineService {
     }
 
     const target = targets[activeTargetIndex];
-    const previousState = this.boatStates.get(boatId);
-
-    // 4. Update memory state
-    this.boatStates.set(boatId, {
-      lat,
-      lng,
-      heading,
-      recordedAt,
-    });
+    // previousState is already captured above
+    // previousState was grabbed at the top of the function before setting the new state
+    // Now we check if the previousState we grabbed had valid coordinates
 
     if (!previousState) return; // Need at least two points to form a line/vector
 
