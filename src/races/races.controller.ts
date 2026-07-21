@@ -138,12 +138,11 @@ export class RacesController {
     return this.racesService.recordCheckpointPass(id, dto, user);
   }
 
+  @Public()
   @Get(':id/standings')
-  @ApiCookieAuth(AUTH_COOKIE)
-  @Roles('SAILOR', 'COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Anlık yarış sıralaması' })
-  async getStandings(@Param('id') id: string, @CurrentUser() user: SessionUser) {
-    return this.racesService.getStandings(id, user);
+  async getStandings(@Param('id') id: string) {
+    return this.racesService.getStandings(id);
   }
   @Public()
   @Get(':id/playback-data')

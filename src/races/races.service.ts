@@ -418,10 +418,6 @@ export class RacesService {
     const race = await this.racesRepo.findOne({ where: { id: raceId }, relations: ['course'] });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
-    if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
-      throw new ForbiddenException('Sadece kendi yarışınızın sıralamasına müdahale edebilirsiniz.');
-    }
-
     const applications = await this.applicationsRepo.find({
       where: { raceId, status: 'CHECKED_IN' },
       relations: ['boat'],
@@ -713,10 +709,10 @@ export class RacesService {
         `"${finishTime}"`,
         `"${finishPos}"`,
         `"${app.status}"`
-      ].join(',');
+      ].join(';');
     });
 
-    return [headers.join(','), ...rows].join('\n');
+    return '\uFEFF' + [headers.join(';'), ...rows].join('\n');
   }
 
   async getPlaybackData(raceId: string) {
