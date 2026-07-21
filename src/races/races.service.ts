@@ -13,7 +13,7 @@ import { User } from '../entities/user.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
 import { TrackPoint } from '../entities/track-point.entity';
-import { RaceStatusEnum, NotificationEventEnum, CourseStatusEnum, UserRoleEnum } from '../common/constants';
+import { RaceStatusEnum, NotificationEventEnum, CourseStatusEnum, UserRoleEnum, ApplicationStatusEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
 import { serializeRace, RaceLike } from '../common/utils/serialize-race';
 import {
@@ -446,9 +446,10 @@ export class RacesService {
     const raceStartedAt = race.raceState?.startedAt as string | undefined;
 
     let finishIndex = -1;
-    if (race.course?.checkpoints) {
-      const checkpoints = race.course.checkpoints as any[];
-      const targets = checkpoints.filter(cp => {
+    // Prefer courseSnapshot so finish index matches what was active when race started
+    const standingsCheckpoints = (race.courseSnapshot?.checkpoints as any[]) ?? (race.course?.checkpoints as any[]) ?? null;
+    if (standingsCheckpoints) {
+      const targets = standingsCheckpoints.filter(cp => {
         const k = cp.kind || cp.type;
         return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
       });
@@ -500,21 +501,31 @@ export class RacesService {
     return { standings, raceStartedAt: raceStartedAt ?? null };
   }
 
+  private formatElapsed(seconds: number): string {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return h > 0
+      ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+      : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+
   private async finalizeRaceResults(raceId: string): Promise<void> {
     const race = await this.racesRepo.findOne({
       where: { id: raceId },
       relations: ['course'],
     });
-    if (!race || !race.course) return;
+    if (!race) return;
 
-    const checkpoints = race.course.checkpoints as any[] | null;
+    // Prefer courseSnapshot (taken when race started) over live course to avoid mismatch
+    const checkpoints = (race.courseSnapshot?.checkpoints as any[]) ?? (race.course?.checkpoints as any[]) ?? null;
     if (!checkpoints || checkpoints.length === 0) return;
 
     const finishIndex = checkpoints.length - 1;
 
-    // Fetch all applications for this race
+    // Fetch only checked-in applications (participants who actually raced)
     const apps = await this.applicationsRepo.find({
-      where: { raceId },
+      where: { raceId, status: ApplicationStatusEnum.CHECKED_IN },
     });
 
     if (apps.length === 0) return;
@@ -653,7 +664,7 @@ export class RacesService {
                 const isEven = index % 2 === 0;
                 const bg = isEven ? '#ffffff' : '#f8fafc';
                 const timeOrStatus = item.finished ? 
-                  `<span style="color: #166534; font-weight: 600;">${item.finishElapsed} sn</span>` : 
+                  `<span style="color: #166534; font-weight: 600;">${this.formatElapsed(item.finishElapsed)}</span>` : 
                   `<span style="color: #dc2626; font-weight: 600;">Tamamlayamadı</span>`;
                 
                 return `
@@ -686,7 +697,7 @@ export class RacesService {
   }
 
   async exportRaceResults(id: string, user?: SessionUser): Promise<string> {
-    const race = await this.racesRepo.findOne({ where: { id } });
+    const race = await this.racesRepo.findOne({ where: { id }, relations: ['course'] });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
     if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
@@ -694,21 +705,46 @@ export class RacesService {
     }
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId: id, status: 'checked_in' },
+      where: { raceId: id, status: ApplicationStatusEnum.CHECKED_IN },
+      order: { finishPosition: 'ASC' },
       relations: ['boat'],
     });
 
-    const headers = ['Tekne Adi', 'Yelken No', 'Yarismaci', 'Bitis Zamani', 'Bitis Pozisyonu', 'Durum'];
+    const allPasses = await this.checkpointPassRepo.find({
+      where: { raceId: id },
+    });
+
+    const finishIndex = (race.course?.checkpoints as any[])?.length ? (race.course?.checkpoints as any[]).length - 1 : -1;
+
+    const headers = ['Sıra', 'Tekne Adı', 'Yelken No', 'Sınıf', 'Yarışmacı', 'Bitiş Zamanı', 'Geçen Süre'];
+    
     const rows = applications.map(app => {
-      const finishPos = app.finishPosition ? String(app.finishPosition) : '-';
-      const finishTime = app.checkedInAt ? new Date(app.checkedInAt).toLocaleString('tr-TR') : '-';
+      const appPasses = allPasses.filter(p => p.applicationId === app.id);
+      const finishPass = appPasses.find(p => p.checkpointIndex === finishIndex);
+      
+      const finishPos = app.finishPosition ? String(app.finishPosition) : 'DNF/DNS';
+      
+      let finishTime = '-';
+      let elapsedStr = '-';
+      
+      if (finishPass) {
+        finishTime = finishPass.passedAt ? new Date(finishPass.passedAt).toLocaleString('tr-TR') : '-';
+        if (finishPass.elapsedSeconds != null) {
+          const hours = Math.floor(finishPass.elapsedSeconds / 3600);
+          const mins = Math.floor((finishPass.elapsedSeconds % 3600) / 60);
+          const secs = finishPass.elapsedSeconds % 60;
+          elapsedStr = `${hours > 0 ? String(hours).padStart(2, '0') + ':' : ''}${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        }
+      }
+
       return [
+        `"${finishPos}"`,
         `"${app.boatName || ''}"`,
         `"${app.sailNumber || ''}"`,
+        `"${app.boat?.boatClass || ''}"`,
         `"${app.name || ''}"`,
         `"${finishTime}"`,
-        `"${finishPos}"`,
-        `"${app.status}"`
+        `"${elapsedStr}"`
       ].join(';');
     });
 
@@ -748,7 +784,7 @@ export class RacesService {
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId, status: 'checked_in' },
+      where: { raceId, status: ApplicationStatusEnum.CHECKED_IN },
       select: ['id', 'boatId'],
     });
 

@@ -7,7 +7,9 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { RacesService } from './races.service';
 import { RaceFleetService } from './race-fleet.service';
@@ -155,7 +157,14 @@ export class RacesController {
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yarış sonuçlarını dışa aktar (CSV)' })
-  async exportRaceResults(@Param('id') id: string, @CurrentUser() user: SessionUser) {
-    return this.racesService.exportRaceResults(id, user);
+  async exportRaceResults(
+    @Param('id') id: string,
+    @CurrentUser() user: SessionUser,
+    @Res() res: Response,
+  ) {
+    const csv = await this.racesService.exportRaceResults(id, user);
+    res.setHeader('Content-Type', 'text/csv; charset=UTF-8');
+    res.setHeader('Content-Disposition', `attachment; filename="race-results-${id}.csv"`);
+    return res.send(csv);
   }
 }

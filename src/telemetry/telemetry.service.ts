@@ -38,8 +38,11 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
     this.lastWebhookTime = new Date().toISOString();
   }
 
-  // Hooking into webhook success - since we don't emit success, let's just mock it or infer from events? 
-  // We can't infer it yet. So we just leave it 0 or add a mock logic.
+  @OnEvent('webhook.sent', { async: true })
+  handleWebhookSent() {
+    this.webhookSuccessCount++;
+    this.lastWebhookTime = new Date().toISOString();
+  }
 
   async onModuleInit() {
     // initialize total gps points from DB

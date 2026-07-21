@@ -47,6 +47,8 @@ export class WebhooksService {
       if (!response.ok) {
         throw new Error(`Status ${response.status}`);
       }
+      // Emit success event for telemetry tracking
+      this.eventEmitter.emit('webhook.sent', { url, event });
     } catch (err) {
       if (retryCount < 3) {
         this.logger.warn(`Retrying webhook ${url} for event ${event} (Attempt ${retryCount + 1})...`);
