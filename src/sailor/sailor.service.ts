@@ -439,6 +439,7 @@ export class SailorService {
     return {
       raceId,
       raceTitle: race?.title ?? '',
+      raceStatus: race?.status ?? '',
       total: leaderboard.length,
       leaderboard,
     };
