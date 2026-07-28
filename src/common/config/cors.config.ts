@@ -11,11 +11,38 @@ function parseOrigins(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Her origin için www ve www'suz versiyonunu otomatik olarak ekler.
+ * Örnek: https://themistracker.com → https://themistracker.com + https://www.themistracker.com
+ */
+function expandWwwVariants(origins: string[]): string[] {
+  const expanded: string[] = [];
+  for (const origin of origins) {
+    expanded.push(origin);
+    try {
+      const url = new URL(origin);
+      if (url.hostname.startsWith('www.')) {
+        // www varsa → www'suz versiyonu da ekle
+        url.hostname = url.hostname.slice(4);
+        expanded.push(url.origin);
+      } else if (!url.hostname.startsWith('localhost') && !url.hostname.match(/^\d/)) {
+        // www yoksa → www'lu versiyonu da ekle (localhost ve IP'ler hariç)
+        url.hostname = `www.${url.hostname}`;
+        expanded.push(url.origin);
+      }
+    } catch {
+      // Geçersiz URL'leri atla
+    }
+  }
+  return expanded;
+}
+
 export function getAllowedOrigins(config: ConfigService): string[] {
   const fromList = parseOrigins(config.get<string>('CORS_ORIGINS'));
   const fromFrontend = parseOrigins(config.get<string>('FRONTEND_URL'));
   const merged = [...fromList, ...fromFrontend];
-  return merged.length > 0 ? [...new Set(merged)] : DEFAULT_ORIGINS;
+  const base = merged.length > 0 ? merged : DEFAULT_ORIGINS;
+  return [...new Set(expandWwwVariants(base))];
 }
 
 function isDevLanOrigin(origin: string): boolean {
