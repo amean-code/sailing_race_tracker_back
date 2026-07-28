@@ -13,7 +13,7 @@ import { Response } from 'express';
 import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { RacesService } from './races.service';
 import { RaceFleetService } from './race-fleet.service';
-import { CreateRaceDto, RaceApplicationDto, UpdateRaceDto } from './dto/race.dto';
+import { CreateRaceDto, RaceApplicationDto, UpdateRaceDto, RaceActionDto } from './dto/race.dto';
 import { CheckInDto } from './dto/check-in.dto';
 import { RecordCheckpointPassDto } from './dto/checkpoint-pass.dto';
 import { CurrentUser, Public, Roles, SessionUser } from '../common/decorators';
@@ -117,6 +117,19 @@ export class RacesController {
     @CurrentUser() user: SessionUser,
   ) {
     const race = await this.racesService.update(id, dto, user);
+    return { race };
+  }
+
+  @Post(':id/actions')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Yarış operasyonları (bitir, tatil et, baştan başlat)' })
+  async handleAction(
+    @Param('id') id: string,
+    @Body() dto: RaceActionDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    const race = await this.racesService.handleRaceAction(id, dto, user);
     return { race };
   }
 

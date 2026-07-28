@@ -65,6 +65,9 @@ export class Boat {
   @Column({ type: 'text', nullable: true })
   color!: string | null;
 
+  @Column({ name: 'crew_members', type: 'jsonb', nullable: true })
+  crewMembers!: string[] | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

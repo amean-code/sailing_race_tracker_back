@@ -40,6 +40,7 @@ export class ApplicationsService {
       checkedInAt: app.checkedInAt?.toISOString() ?? null,
       finishPosition: app.finishPosition,
       fleetSize: app.fleetSize,
+      crewMembers: app.crewMembers,
       createdAt: app.createdAt.toISOString(),
     };
   }
@@ -81,12 +82,12 @@ export class ApplicationsService {
     }
 
     if (dto.status !== undefined) {
-      if (app.status === ApplicationStatusEnum.CHECKED_IN && dto.status !== ApplicationStatusEnum.CHECKED_IN) {
-        throw new BadRequestException('Check-in yapılmış başvurunun durumu değiştirilemez');
+      if (app.status === ApplicationStatusEnum.APPROVED && dto.status === ApplicationStatusEnum.APPROVED) {
+        // Already approved, no-op for boat creation
       }
       app.status = dto.status;
 
-      if (dto.status === ApplicationStatusEnum.CHECKED_IN) {
+      if (dto.status === ApplicationStatusEnum.APPROVED) {
         let boat = await this.boatsRepo.findOne({ where: { applicationId: app.id } });
         if (!boat) {
           const existingCount = await this.boatsRepo.count({
@@ -102,6 +103,7 @@ export class ApplicationsService {
             courseId: app.race?.courseId ?? null,
             status: 'registered',
             displayColor: this.pickColor(existingCount),
+            crewMembers: app.crewMembers ?? null,
           });
           await this.boatsRepo.save(boat);
           app.boatId = boat.id;
@@ -139,15 +141,9 @@ export class ApplicationsService {
         throw new ForbiddenException('Sadece kendi yarışınızın başvurularını güncelleyebilirsiniz.');
       }
 
-      // Skip checked-in apps for status changes
-      if (app.status === ApplicationStatusEnum.CHECKED_IN) {
-        results.push(this.serialize(app));
-        continue;
-      }
-
       app.status = dto.status;
 
-      if (dto.status === ApplicationStatusEnum.CHECKED_IN) {
+      if (dto.status === ApplicationStatusEnum.APPROVED) {
         let boat = await this.boatsRepo.findOne({ where: { applicationId: app.id } });
         if (!boat) {
           const existingCount = await this.boatsRepo.count({
@@ -162,6 +158,7 @@ export class ApplicationsService {
             courseId: app.race?.courseId ?? null,
             status: 'registered',
             displayColor: this.pickColor(existingCount),
+            crewMembers: app.crewMembers,
           });
           await this.boatsRepo.save(boat);
           app.boatId = boat.id;

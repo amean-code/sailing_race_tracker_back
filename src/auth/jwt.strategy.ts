@@ -16,6 +16,7 @@ type JwtPayload = {
   role: string;
   name: string | null;
   status?: string;
+  sessionId?: string;
 };
 
 /** Short-lived in-memory user cache to avoid a DB hit on every authenticated request.
@@ -54,7 +55,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     const user = await this.usersRepo.findOne({
       where: { id: payload.sub },
-      select: ['id', 'email', 'name', 'role', 'status'],
+      select: ['id', 'email', 'name', 'role', 'status', 'currentSessionId'],
     });
     if (!user) {
       userCache.delete(payload.sub);
@@ -75,7 +76,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       role: user.role,
       name: user.name,
       status: user.status,
+      sessionId: payload.sessionId,
     };
+
+    if (user.role === 'SAILOR') {
+      if (user.currentSessionId && user.currentSessionId !== payload.sessionId) {
+        userCache.delete(payload.sub);
+        throw new UnauthorizedException('Oturumunuz başka bir cihazdan giriş yapıldığı için sonlandırıldı.');
+      }
+    }
 
     // Cache the resolved user for a short TTL to eliminate duplicate DB lookups
     // within the same page-load burst of parallel requests.

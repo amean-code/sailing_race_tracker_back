@@ -112,7 +112,7 @@ export class RaceFleetService {
     });
     if (!app) throw new NotFoundException('Başvuru bulunamadı');
 
-    if (app.status === ApplicationStatusEnum.CHECKED_IN && app.boat) {
+    if (app.status === ApplicationStatusEnum.APPROVED && app.boat) {
       return {
         application: this.serializeApplication(app),
         boat: this.serializeBoat(app.boat),
@@ -120,11 +120,11 @@ export class RaceFleetService {
     }
 
     if (app.status !== ApplicationStatusEnum.APPROVED) {
-      throw new BadRequestException('Check-in için başvuru onaylanmış olmalı');
+      throw new BadRequestException('Yarışa dahil olmak için başvurunun onaylanmış olması gerekir');
     }
 
     const existingCount = await this.applicationsRepo.count({
-      where: { raceId, status: ApplicationStatusEnum.CHECKED_IN },
+      where: { raceId, status: ApplicationStatusEnum.APPROVED },
     });
 
     let boat = app.boat;
@@ -142,7 +142,7 @@ export class RaceFleetService {
       boat = await this.boatsRepo.save(boat);
     }
 
-    app.status = ApplicationStatusEnum.CHECKED_IN;
+    app.status = ApplicationStatusEnum.APPROVED;
     app.boatId = boat.id;
     app.checkedInAt = new Date();
     await this.applicationsRepo.save(app);

@@ -63,6 +63,13 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  @OnEvent('course.updated')
+  handleCourseUpdated(payload: any) {
+    if (payload.raceId) {
+      this.server.to(payload.raceId).emit('course.updated', payload);
+    }
+  }
+
   @OnEvent('checkpoint.passed')
   handleCheckpointPassed(payload: any) {
     if (payload.raceId) {

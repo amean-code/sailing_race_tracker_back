@@ -57,6 +57,9 @@ export class Race {
   @Column({ name: 'course_id', type: 'text', nullable: true })
   courseId!: string | null;
 
+  @Column({ name: 'course_ids', type: 'jsonb', default: [] })
+  courseIds!: string[];
+
   @Column({ name: 'race_state', type: 'jsonb', default: {} })
   raceState!: Record<string, unknown>;
 

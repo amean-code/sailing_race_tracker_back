@@ -20,6 +20,7 @@ import {
   CreateRaceDto,
   RaceApplicationDto,
   UpdateRaceDto,
+  RaceActionDto,
 } from './dto/race.dto';
 import { RecordCheckpointPassDto } from './dto/checkpoint-pass.dto';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -113,6 +114,7 @@ export class RacesService {
       status: dto.status ?? RaceStatusEnum.OPEN,
       organizer: dto.organizer ?? null,
       courseId: dto.courseId ?? null,
+      courseIds: dto.courseIds ?? [],
       raceState: dto.raceState ?? {},
       createdById,
     });
@@ -173,6 +175,72 @@ export class RacesService {
     race.status = nextStatus;
   }
 
+  async handleRaceAction(id: string, dto: RaceActionDto, user: SessionUser) {
+    const race = await this.racesRepo.findOne({ where: { id } });
+    if (!race) throw new NotFoundException('Yarış bulunamadı');
+
+    if (!['COMMITTEE', 'ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
+      throw new ForbiddenException('Bu işlem için yetkiniz yok');
+    }
+    if (user.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
+      throw new ForbiddenException('Sadece kendi oluşturduğunuz yarışa müdahale edebilirsiniz.');
+    }
+
+    const { action, reason } = dto;
+
+    if (action === 'finish') {
+      race.status = RaceStatusEnum.FINISHED;
+      
+      const now = new Date().toISOString();
+      const state = { ...(race.raceState || {}) };
+      state.finishedAt = now;
+      if (state.startedAt) {
+        state.durationSeconds = Math.floor((new Date(now).getTime() - new Date(state.startedAt as string).getTime()) / 1000);
+      }
+      race.raceState = state;
+      
+      await this.racesRepo.save(race);
+      await this.finalizeRaceResults(race.id);
+    } else if (action === 'abandon') {
+      race.status = RaceStatusEnum.CANCELLED;
+      if (!race.title.startsWith('TAMAMLANAMAYAN ')) {
+        race.title = `TAMAMLANAMAYAN ${race.title}`;
+      }
+      const now = new Date().toISOString();
+      const state = { ...(race.raceState || {}) };
+      state.abandonReason = reason;
+      state.finishedAt = now;
+      if (state.startedAt) {
+        state.durationSeconds = Math.floor((new Date(now).getTime() - new Date(state.startedAt as string).getTime()) / 1000);
+      }
+      race.raceState = state;
+      await this.racesRepo.save(race);
+    } else if (action === 'restart') {
+      race.status = RaceStatusEnum.OPEN;
+      const state = { ...(race.raceState || {}) };
+      delete state.startedAt;
+      delete state.statusBeforeSuspend;
+      delete state.statusBeforeClose;
+      delete state.statusBeforeCancel;
+      delete state.finishedAt;
+      delete state.durationSeconds;
+      state.restartReason = reason;
+      race.raceState = state;
+
+      await this.racesRepo.save(race);
+
+      // Clear all checkpoint passes for this race
+      await this.checkpointPassRepo.delete({ raceId: race.id });
+
+      // Clear all track points for this race
+      await this.trackPointsRepo.delete({ raceId: race.id });
+    } else {
+      throw new BadRequestException('Geçersiz işlem');
+    }
+
+    return this.racesRepo.findOne({ where: { id }, relations: ['course'] });
+  }
+
   async update(id: string, dto: UpdateRaceDto, user?: SessionUser) {
     const race = await this.racesRepo.findOne({ where: { id } });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
@@ -224,8 +292,17 @@ export class RacesService {
       }
       race.courseId = dto.courseId ?? null;
     }
+    if (dto.courseIds !== undefined) {
+      race.courseIds = dto.courseIds ?? [];
+    }
     if (dto.raceState !== undefined) {
       race.raceState = { ...(race.raceState ?? {}), ...(dto.raceState ?? {}) };
+    }
+    
+    let courseSnapshotChanged = false;
+    if (dto.courseSnapshot !== undefined) {
+      race.courseSnapshot = dto.courseSnapshot;
+      courseSnapshotChanged = true;
     }
 
     if (race.status === RaceStatusEnum.IN_PROGRESS && !race.courseSnapshot && race.courseId) {
@@ -263,6 +340,13 @@ export class RacesService {
       }
     } else {
       this.notificationsService.dispatchAsync(NotificationEventEnum.RACE_UPDATED, ctx);
+    }
+    
+    if (courseSnapshotChanged) {
+      this.eventEmitter.emit('course.updated', {
+        raceId: saved.id,
+        courseSnapshot: saved.courseSnapshot,
+      });
     }
 
     return result;
@@ -338,6 +422,7 @@ export class RacesService {
       sailNumber: dto.sailNumber,
       club: dto.club ?? null,
       notes: dto.notes ?? null,
+      crewMembers: dto.crewMembers ?? null,
     });
     const saved = await this.applicationsRepo.save(application);
 
@@ -419,7 +504,7 @@ export class RacesService {
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId, status: 'CHECKED_IN' },
+      where: { raceId, status: ApplicationStatusEnum.APPROVED },
       relations: ['boat'],
       order: { createdAt: 'ASC' },
     });
@@ -523,9 +608,9 @@ export class RacesService {
 
     const finishIndex = checkpoints.length - 1;
 
-    // Fetch only checked-in applications (participants who actually raced)
+    // Fetch only approved applications (participants who actually raced)
     const apps = await this.applicationsRepo.find({
-      where: { raceId, status: ApplicationStatusEnum.CHECKED_IN },
+      where: { raceId, status: ApplicationStatusEnum.APPROVED },
     });
 
     if (apps.length === 0) return;
@@ -705,7 +790,7 @@ export class RacesService {
     }
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId: id, status: ApplicationStatusEnum.CHECKED_IN },
+      where: { raceId: id, status: ApplicationStatusEnum.APPROVED },
       order: { finishPosition: 'ASC' },
       relations: ['boat'],
     });
@@ -784,7 +869,7 @@ export class RacesService {
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId, status: ApplicationStatusEnum.CHECKED_IN },
+      where: { raceId, status: ApplicationStatusEnum.APPROVED },
       select: ['id', 'boatId'],
     });
 

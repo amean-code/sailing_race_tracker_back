@@ -58,7 +58,10 @@ export class RaceEngineService {
 
     // 1. Get Active Race Application
     const app = await this.applicationsRepo.findOne({
-      where: { raceId, boatId, status: 'CHECKED_IN' },
+      where: [
+        { raceId, boatId, status: 'APPROVED' as any },
+        { raceId, boatId, status: 'CHECKED_IN' as any },
+      ],
     });
     if (!app) return;
 

@@ -32,6 +32,7 @@ export class BoatsService {
       length: boat.length,
       width: boat.width,
       color: boat.color,
+      crewMembers: boat.crewMembers,
       createdAt: boat.createdAt.toISOString(),
       updatedAt: boat.updatedAt.toISOString(),
     };
@@ -74,6 +75,7 @@ export class BoatsService {
       length: dto.length ?? null,
       width: dto.width ?? null,
       color: dto.color ?? null,
+      crewMembers: dto.crewMembers ?? null,
     });
     const saved = await this.boatsRepo.save(boat);
     return this.serialize(saved);
@@ -94,6 +96,7 @@ export class BoatsService {
     if (dto.length !== undefined) boat.length = dto.length;
     if (dto.width !== undefined) boat.width = dto.width;
     if (dto.color !== undefined) boat.color = dto.color;
+    if (dto.crewMembers !== undefined) boat.crewMembers = dto.crewMembers;
     const saved = await this.boatsRepo.save(boat);
     return this.serialize(saved);
   }

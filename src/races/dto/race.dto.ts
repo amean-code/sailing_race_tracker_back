@@ -6,6 +6,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsArray,
   Max,
   Min,
   MinLength,
@@ -72,10 +73,21 @@ export class CreateRaceDto {
   @IsString()
   courseId?: string | null;
 
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  courseIds?: string[];
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsObject()
   raceState?: Record<string, unknown>;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsObject()
+  courseSnapshot?: Record<string, unknown>;
 }
 
 export class UpdateRaceDto {
@@ -141,10 +153,21 @@ export class UpdateRaceDto {
   @IsString()
   courseId?: string | null;
 
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  courseIds?: string[];
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsObject()
   raceState?: Record<string, unknown>;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsObject()
+  courseSnapshot?: Record<string, unknown>;
 }
 
 export class RaceApplicationDto {
@@ -181,4 +204,21 @@ export class RaceApplicationDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  crewMembers?: string[];
+}
+
+export class RaceActionDto {
+  @ApiProperty({ enum: ['finish', 'abandon', 'restart'] })
+  @IsString()
+  action!: 'finish' | 'abandon' | 'restart';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  reason?: string;
 }

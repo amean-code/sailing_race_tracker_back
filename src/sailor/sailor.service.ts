@@ -77,7 +77,6 @@ export class SailorService {
       where: [
         { email, status: ApplicationStatusEnum.PENDING },
         { email, status: ApplicationStatusEnum.APPROVED },
-        { email, status: ApplicationStatusEnum.CHECKED_IN },
       ],
       relations: ['race'],
       order: { checkedInAt: 'DESC', createdAt: 'DESC' },
@@ -157,11 +156,11 @@ export class SailorService {
 
     const activeRaces = activeList.map(mapActiveRace);
 
-    // Prefer CHECKED_IN race for the initial active race
-    const checkedIn = activeRaces.find((r) => r.applicationStatus === ApplicationStatusEnum.CHECKED_IN);
+    // Prefer IN_PROGRESS race (has boatId) for the initial active race
+    const approved = activeRaces.find((r) => r.applicationStatus === ApplicationStatusEnum.APPROVED && r.boatId);
 
     return {
-      activeRace: checkedIn || activeRaces[0],
+      activeRace: approved || activeRaces[0],
       activeRaces,
     };
   }

@@ -67,12 +67,23 @@ export class AuthController {
     return { user };
   }
 
-  @Public()
   @Post('logout')
   @ApiOperation({ summary: 'Oturumu kapat' })
-  logout(@Res({ passthrough: true }) res: Response) {
+  async logout(@CurrentUser() session: SessionUser | undefined, @Res({ passthrough: true }) res: Response) {
+    if (session?.sub) {
+      await this.authService.logout(session.sub);
+    }
     this.clearCookie(res);
     return { ok: true };
+  }
+
+  @Post('ping')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @ApiOperation({ summary: 'Oturumu canlı tut (Sadece SAILOR)' })
+  async pingSession(@CurrentUser() session: SessionUser) {
+    if (!session?.sub) throw new UnauthorizedException('Yetkisiz erişim');
+    if (!session.sessionId) return { ok: true };
+    return this.authService.pingSession(session.sub, session.sessionId);
   }
 
   @Get('me')

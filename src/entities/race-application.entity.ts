@@ -62,6 +62,9 @@ export class RaceApplication {
   @Column({ name: 'fleet_size', type: 'int', nullable: true })
   fleetSize!: number | null;
 
+  @Column({ name: 'crew_members', type: 'jsonb', nullable: true })
+  crewMembers!: string[] | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

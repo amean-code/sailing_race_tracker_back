@@ -97,7 +97,7 @@ export class DemoTestController {
       boatName: 'Test Boat',
       sailNumber: 'TEST-123',
       club: 'Test Club',
-      status: 'CHECKED_IN' as any,
+      status: 'APPROVED' as any,
     });
     const savedApp = await this.appsRepo.save(app);
 
@@ -219,7 +219,7 @@ export class DemoTestController {
           boatName: b.name,
           sailNumber: `TUR-${Math.floor(Math.random() * 1000)}`,
           club: 'Demo Club',
-          status: 'CHECKED_IN' as any,
+          status: 'APPROVED' as any,
         }));
       }
     }

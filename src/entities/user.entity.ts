@@ -38,6 +38,12 @@ export class User {
   @Column({ name: 'invite_token_expires', type: 'timestamp', nullable: true })
   inviteTokenExpires!: Date | null;
 
+  @Column({ name: 'current_session_id', type: 'text', nullable: true })
+  currentSessionId!: string | null;
+
+  @Column({ name: 'session_last_active_at', type: 'timestamp', nullable: true })
+  sessionLastActiveAt!: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

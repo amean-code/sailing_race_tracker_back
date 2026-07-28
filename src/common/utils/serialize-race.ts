@@ -22,6 +22,7 @@ export type RaceLike = {
   status: RaceStatusEnum | string;
   organizer: string | null;
   courseId: string | null;
+  courseIds?: string[];
   course?: CourseLike | null;
   raceState?: Record<string, unknown> | null;
   createdAt: Date;
@@ -116,6 +117,7 @@ export function serializeRace(race: RaceLike) {
     status: normalizeRaceStatus(race.status).toLowerCase(),
     organizer: race.organizer,
     courseId: race.courseId,
+    courseIds: (race as any).courseIds ?? [],
     course: race.course ? serializeCourse(race.course) : null,
     raceState: race.raceState ?? {},
     appliedCount,

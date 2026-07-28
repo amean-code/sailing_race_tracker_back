@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, MinLength } from 'class-validator';
+import { IsArray, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class CreateBoatDto {
   @ApiProperty()
@@ -64,6 +64,12 @@ export class CreateBoatDto {
   @IsOptional()
   @IsString()
   color?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  crewMembers?: string[];
 }
 export class UpdateBoatDto {
   @ApiPropertyOptional()
@@ -123,4 +129,10 @@ export class UpdateBoatDto {
   @IsOptional()
   @IsString()
   color?: string | null;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  crewMembers?: string[] | null;
 }

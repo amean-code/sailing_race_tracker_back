@@ -45,13 +45,14 @@ export class AuthService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  createToken(user: Pick<User, 'id' | 'email' | 'name' | 'role' | 'status'>) {
+  createToken(user: Pick<User, 'id' | 'email' | 'name' | 'role' | 'status'>, sessionId?: string) {
     return this.jwtService.sign({
       sub: user.id,
       email: user.email,
       role: user.role,
       name: user.name,
       status: user.status,
+      sessionId: sessionId,
     });
   }
 
@@ -148,9 +149,46 @@ export class AuthService {
       throw new UnauthorizedException('E-posta veya şifre hatalı');
     }
     this.assertUserCanAccess(user);
+    
+    // Single active session check for SAILOR
+    let newSessionId: string | undefined = undefined;
+    if (user.role === UserRoleEnum.SAILOR) {
+      if (user.sessionLastActiveAt) {
+        const diffSeconds = (new Date().getTime() - user.sessionLastActiveAt.getTime()) / 1000;
+        if (diffSeconds < 30) {
+          throw new ForbiddenException('Hesap şu an başka bir cihazda aktif. (Çıkış yapılmadıysa 30 sn bekleyiniz)');
+        }
+      }
+      newSessionId = uuidv4();
+      user.currentSessionId = newSessionId;
+      user.sessionLastActiveAt = new Date();
+    }
+    
     user.lastLoginAt = new Date();
     await this.usersRepo.save(user);
-    return { user: this.toPublicUser(user), token: this.createToken(user) };
+    return { user: this.toPublicUser(user), token: this.createToken(user, newSessionId) };
+  }
+
+  async pingSession(userId: string, sessionId: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('Yetkisiz erişim');
+    if (user.role !== UserRoleEnum.SAILOR) return { ok: true };
+    if (user.currentSessionId !== sessionId) {
+      throw new UnauthorizedException('Oturum sonlandırıldı (Başka cihazdan giriş yapıldı)');
+    }
+    user.sessionLastActiveAt = new Date();
+    await this.usersRepo.save(user);
+    return { ok: true };
+  }
+
+  async logout(userId: string) {
+    const user = await this.usersRepo.findOne({ where: { id: userId } });
+    if (user && user.role === UserRoleEnum.SAILOR) {
+      user.currentSessionId = null;
+      user.sessionLastActiveAt = null;
+      await this.usersRepo.save(user);
+    }
+    return { ok: true };
   }
 
   async getMe(userId: string) {
