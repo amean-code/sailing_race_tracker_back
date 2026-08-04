@@ -9,7 +9,7 @@ import {
   Unique,
 } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
-import { ApplicationStatusEnum } from '../common/constants';
+import { ApplicationStatusEnum, PaymentStatusEnum } from '../common/constants';
 import { Race } from './race.entity';
 import { Boat } from './boat.entity';
 import { User } from './user.entity';
@@ -64,6 +64,25 @@ export class RaceApplication {
 
   @Column({ name: 'crew_members', type: 'jsonb', nullable: true })
   crewMembers!: string[] | null;
+
+  @Column({
+    name: 'payment_status',
+    type: 'text',
+    default: PaymentStatusEnum.NONE,
+  })
+  paymentStatus!: PaymentStatusEnum | string;
+
+  @Column({ name: 'payment_receipt_path', type: 'text', nullable: true })
+  paymentReceiptPath!: string | null;
+
+  @Column({ name: 'payment_receipt_file_name', type: 'text', nullable: true })
+  paymentReceiptFileName!: string | null;
+
+  @Column({ name: 'payment_note', type: 'text', nullable: true })
+  paymentNote!: string | null;
+
+  @Column({ name: 'payment_reviewed_at', type: 'timestamp', nullable: true })
+  paymentReviewedAt!: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

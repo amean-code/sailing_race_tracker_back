@@ -70,6 +70,12 @@ export class CreateBoatDto {
   @IsArray()
   @IsString({ each: true })
   crewMembers?: string[];
+
+  @ApiPropertyOptional({ type: [String], description: 'Bağlanacak sertifika ID listesi' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  certificateIds?: string[];
 }
 export class UpdateBoatDto {
   @ApiPropertyOptional()
@@ -135,4 +141,10 @@ export class UpdateBoatDto {
   @IsArray()
   @IsString({ each: true })
   crewMembers?: string[] | null;
+
+  @ApiPropertyOptional({ type: [String], description: 'Bağlanacak sertifika ID listesi' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  certificateIds?: string[];
 }

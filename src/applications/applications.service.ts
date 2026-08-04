@@ -1,12 +1,19 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, StreamableFile } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { createReadStream, existsSync } from 'fs';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Boat } from '../entities/boat.entity';
 import { Race } from '../entities/race.entity';
-import { ApplicationStatusEnum, UserRoleEnum } from '../common/constants';
+import { ApplicationStatusEnum, PaymentStatusEnum, UserRoleEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
-import { BulkUpdateApplicationDto, UpdateApplicationDto } from './dto/application.dto';
+import { BulkUpdateApplicationDto, ReviewPaymentDto, UpdateApplicationDto } from './dto/application.dto';
+import {
+  absoluteUploadPath,
+  deleteUploadFile,
+  relativeUploadPath,
+  RECEIPTS_DIR,
+} from '../common/upload';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
@@ -41,6 +48,13 @@ export class ApplicationsService {
       finishPosition: app.finishPosition,
       fleetSize: app.fleetSize,
       crewMembers: app.crewMembers,
+      paymentStatus: app.paymentStatus ?? PaymentStatusEnum.NONE,
+      paymentReceiptFileName: app.paymentReceiptFileName,
+      paymentReceiptUrl: app.paymentReceiptPath
+        ? `/api/applications/${app.id}/payment-receipt`
+        : null,
+      paymentNote: app.paymentNote,
+      paymentReviewedAt: app.paymentReviewedAt?.toISOString() ?? null,
       createdAt: app.createdAt.toISOString(),
     };
   }
@@ -55,7 +69,7 @@ export class ApplicationsService {
     }
 
     if (user?.role === UserRoleEnum.COMMITTEE) {
-      qb.andWhere('race.createdById = :userId', { userId: user.sub });
+      qb.andWhere('race.assignedCommitteeId = :userId', { userId: user.sub });
     }
 
     const applications = await qb.getMany();
@@ -77,8 +91,11 @@ export class ApplicationsService {
     });
     if (!app) throw new NotFoundException('Başvuru bulunamadı');
 
-    if (user?.role === UserRoleEnum.COMMITTEE && app.race?.createdById !== user.sub) {
-      throw new ForbiddenException('Sadece kendi yarışınızın başvurularını güncelleyebilirsiniz.');
+    if (
+      user?.role === UserRoleEnum.COMMITTEE &&
+      app.race?.assignedCommitteeId !== user.sub
+    ) {
+      throw new ForbiddenException('Bu yarış size atanmamış.');
     }
 
     if (dto.status !== undefined) {
@@ -137,10 +154,6 @@ export class ApplicationsService {
     const results: ReturnType<typeof this.serialize>[] = [];
 
     for (const app of apps) {
-      if (user?.role === UserRoleEnum.COMMITTEE && app.race?.createdById !== user.sub) {
-        throw new ForbiddenException('Sadece kendi yarışınızın başvurularını güncelleyebilirsiniz.');
-      }
-
       app.status = dto.status;
 
       if (dto.status === ApplicationStatusEnum.APPROVED) {
@@ -176,5 +189,93 @@ export class ApplicationsService {
     }
 
     return results;
+  }
+
+  private async getAppWithRace(id: string) {
+    const app = await this.applicationsRepo.findOne({
+      where: { id },
+      relations: ['race'],
+    });
+    if (!app) throw new NotFoundException('Başvuru bulunamadı');
+    return app;
+  }
+
+  private assertSailorOwns(app: RaceApplication, user: SessionUser) {
+    const email = user.email?.toLowerCase();
+    if (app.userId === user.sub) return;
+    if (email && app.email?.toLowerCase() === email) return;
+    throw new ForbiddenException('Bu başvuru size ait değil');
+  }
+
+  private assertCanManageApp(app: RaceApplication, user: SessionUser) {
+    if (user.role === UserRoleEnum.ADMIN || user.role === UserRoleEnum.SUPER_ADMIN) return;
+    if (
+      user.role === UserRoleEnum.COMMITTEE &&
+      app.race?.assignedCommitteeId === user.sub
+    ) {
+      return;
+    }
+    throw new ForbiddenException('Bu başvuruyu yönetme yetkiniz yok');
+  }
+
+  async uploadPaymentReceipt(id: string, user: SessionUser, file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('Dekont dosyası gerekli');
+    const app = await this.getAppWithRace(id);
+    this.assertSailorOwns(app, user);
+
+    deleteUploadFile(app.paymentReceiptPath);
+    app.paymentReceiptPath = relativeUploadPath(RECEIPTS_DIR, file.filename);
+    app.paymentReceiptFileName = file.originalname;
+    app.paymentStatus = PaymentStatusEnum.PENDING;
+    app.paymentNote = null;
+    app.paymentReviewedAt = null;
+    if (!app.userId) app.userId = user.sub;
+
+    const saved = await this.applicationsRepo.save(app);
+    return this.serialize(saved);
+  }
+
+  async reviewPayment(id: string, dto: ReviewPaymentDto, user: SessionUser) {
+    const app = await this.getAppWithRace(id);
+    this.assertCanManageApp(app, user);
+
+    if (!app.paymentReceiptPath && dto.status === PaymentStatusEnum.APPROVED) {
+      throw new BadRequestException('Dekont yüklenmeden ödeme onaylanamaz');
+    }
+
+    app.paymentStatus = dto.status;
+    app.paymentNote = dto.note?.trim() || null;
+    app.paymentReviewedAt = new Date();
+
+    const saved = await this.applicationsRepo.save(app);
+    return this.serialize(saved);
+  }
+
+  async getPaymentReceiptFile(id: string, user: SessionUser): Promise<{
+    file: StreamableFile;
+    fileName: string;
+  }> {
+    const app = await this.getAppWithRace(id);
+
+    const isOwner =
+      app.userId === user.sub ||
+      (user.email && app.email?.toLowerCase() === user.email.toLowerCase());
+    const isStaff =
+      user.role === UserRoleEnum.ADMIN ||
+      user.role === UserRoleEnum.SUPER_ADMIN ||
+      (user.role === UserRoleEnum.COMMITTEE && app.race?.assignedCommitteeId === user.sub);
+
+    if (!isOwner && !isStaff) {
+      throw new ForbiddenException('Bu dekonta erişim yok');
+    }
+    if (!app.paymentReceiptPath) throw new NotFoundException('Dekont bulunamadı');
+
+    const full = absoluteUploadPath(app.paymentReceiptPath);
+    if (!existsSync(full)) throw new NotFoundException('Dekont dosyası bulunamadı');
+
+    return {
+      file: new StreamableFile(createReadStream(full)),
+      fileName: app.paymentReceiptFileName || 'dekont',
+    };
   }
 }

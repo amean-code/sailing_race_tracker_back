@@ -42,6 +42,9 @@ lerna-debug.log*
 .env.production.local
 !.env.example
 
+# uploads
+/uploads
+
 # temp
 *.swp
 *.swo

@@ -65,7 +65,7 @@ export class BoatsController {
         throw new ForbiddenException('Bu tekne size ait değil');
       }
     }
-    const boat = await this.boatsService.update(id, dto);
+    const boat = await this.boatsService.update(id, dto, user.sub);
     return { boat };
   }
 

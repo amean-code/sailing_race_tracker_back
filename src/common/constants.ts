@@ -33,6 +33,19 @@ export enum RaceStatusEnum {
   CANCELLED = 'CANCELLED',
 }
 
+export enum RaceTypeEnum {
+  REGATA = 'REGATA',
+  TROFE_LEG = 'TROFE_LEG',
+}
+
+export enum TrophyStatusEnum {
+  DRAFT = 'DRAFT',
+  OPEN = 'OPEN',
+  IN_PROGRESS = 'IN_PROGRESS',
+  FINISHED = 'FINISHED',
+  CANCELLED = 'CANCELLED',
+}
+
 export enum CourseStatusEnum {
   DRAFT = 'DRAFT',
   PENDING = 'PENDING',
@@ -48,6 +61,22 @@ export enum ApplicationStatusEnum {
   WITHDRAWN = 'WITHDRAWN',
   DNS = 'DNS',
   DNF = 'DNF',
+}
+
+export enum CertificateTypeEnum {
+  IRC = 'IRC',
+  ORC = 'ORC',
+  INSURANCE = 'INSURANCE',
+  SKIPPER_LICENSE = 'SKIPPER_LICENSE',
+  MEASUREMENT = 'MEASUREMENT',
+  OTHER = 'OTHER',
+}
+
+export enum PaymentStatusEnum {
+  NONE = 'NONE',
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
 }
 
 export enum NotificationEventEnum {

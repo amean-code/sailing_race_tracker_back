@@ -10,11 +10,12 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
-import { RaceStatusEnum } from '../common/constants';
+import { RaceStatusEnum, RaceTypeEnum } from '../common/constants';
 import { Course } from './course.entity';
 import { RaceApplication } from './race-application.entity';
 import { Boat } from './boat.entity';
 import { TrackPoint } from './track-point.entity';
+import { Trophy } from './trophy.entity';
 
 @Entity('races')
 export class Race {
@@ -51,6 +52,20 @@ export class Race {
   @Column({ type: 'enum', enum: RaceStatusEnum, enumName: 'RaceStatus', default: RaceStatusEnum.OPEN })
   status!: RaceStatusEnum;
 
+  @Column({
+    type: 'enum',
+    enum: RaceTypeEnum,
+    enumName: 'RaceType',
+    default: RaceTypeEnum.REGATA,
+  })
+  type!: RaceTypeEnum;
+
+  @Column({ name: 'trophy_id', type: 'text', nullable: true })
+  trophyId!: string | null;
+
+  @Column({ name: 'leg_order', type: 'int', nullable: true })
+  legOrder!: number | null;
+
   @Column({ type: 'text', nullable: true })
   organizer!: string | null;
 
@@ -69,6 +84,9 @@ export class Race {
   @Column({ name: 'created_by_id', type: 'text', nullable: true })
   createdById!: string | null;
 
+  @Column({ name: 'assigned_committee_id', type: 'text', nullable: true })
+  assignedCommitteeId!: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 
@@ -78,6 +96,10 @@ export class Race {
   @ManyToOne(() => Course, (course) => course.races, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'course_id' })
   course!: Course | null;
+
+  @ManyToOne(() => Trophy, (trophy) => trophy.legs, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'trophy_id' })
+  trophy!: Trophy | null;
 
   @OneToMany(() => RaceApplication, (app) => app.race)
   applications!: RaceApplication[];

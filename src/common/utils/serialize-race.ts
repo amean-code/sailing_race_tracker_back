@@ -1,4 +1,4 @@
-import { RaceStatusEnum } from '../constants';
+import { RaceStatusEnum, RaceTypeEnum } from '../constants';
 
 export type CourseLike = {
   id: string;
@@ -6,6 +6,11 @@ export type CourseLike = {
   checkpoints: unknown;
   createdAt: Date;
   updatedAt: Date;
+};
+
+export type TrophySummaryLike = {
+  id: string;
+  title: string;
 };
 
 export type RaceLike = {
@@ -20,6 +25,10 @@ export type RaceLike = {
   boatClass: string | null;
   capacity: number;
   status: RaceStatusEnum | string;
+  type?: RaceTypeEnum | string;
+  trophyId?: string | null;
+  legOrder?: number | null;
+  trophy?: TrophySummaryLike | null;
   organizer: string | null;
   courseId: string | null;
   courseIds?: string[];
@@ -29,6 +38,7 @@ export type RaceLike = {
   updatedAt: Date;
   applicationCount?: number;
   createdById?: string | null;
+  assignedCommitteeId?: string | null;
 };
 
 export type PublicRegistrationStatus =
@@ -41,6 +51,11 @@ export type PublicRegistrationStatus =
 
 function normalizeRaceStatus(status: RaceStatusEnum | string): RaceStatusEnum {
   return String(status).toUpperCase() as RaceStatusEnum;
+}
+
+function normalizeRaceType(type?: RaceTypeEnum | string | null): RaceTypeEnum {
+  const value = String(type || RaceTypeEnum.REGATA).toUpperCase();
+  return value === RaceTypeEnum.TROFE_LEG ? RaceTypeEnum.TROFE_LEG : RaceTypeEnum.REGATA;
 }
 
 function toDate(value: Date | string): Date {
@@ -102,6 +117,7 @@ export function serializeRace(race: RaceLike) {
     registrationOpen,
     registrationStatus,
   } = computeRegistrationState(race, appliedCount);
+  const type = normalizeRaceType(race.type);
 
   return {
     id: race.id,
@@ -115,6 +131,14 @@ export function serializeRace(race: RaceLike) {
     boatClass: race.boatClass,
     capacity: race.capacity,
     status: normalizeRaceStatus(race.status).toLowerCase(),
+    type: type.toLowerCase(),
+    trophyId: race.trophyId ?? null,
+    legOrder: race.legOrder ?? null,
+    trophy: race.trophy
+      ? { id: race.trophy.id, title: race.trophy.title }
+      : race.trophyId
+        ? { id: race.trophyId, title: '' }
+        : null,
     organizer: race.organizer,
     courseId: race.courseId,
     courseIds: (race as any).courseIds ?? [],
@@ -127,5 +151,6 @@ export function serializeRace(race: RaceLike) {
     createdAt: toDate(race.createdAt).toISOString(),
     updatedAt: toDate(race.updatedAt).toISOString(),
     createdById: race.createdById ?? null,
+    assignedCommitteeId: race.assignedCommitteeId ?? null,
   };
 }

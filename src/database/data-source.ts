@@ -15,6 +15,7 @@ import {
   CheckpointPass,
   WebhookSubscription,
   AuditLog,
+  Trophy,
 } from '../entities';
 
 export const AppDataSource = new DataSource({
@@ -34,6 +35,7 @@ export const AppDataSource = new DataSource({
     CheckpointPass,
     WebhookSubscription,
     AuditLog,
+    Trophy,
   ],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: true,

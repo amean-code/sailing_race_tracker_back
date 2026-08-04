@@ -4,6 +4,8 @@ import {
   CreateDateColumn,
   Entity,
   JoinColumn,
+  JoinTable,
+  ManyToMany,
   ManyToOne,
   OneToMany,
   PrimaryColumn,
@@ -14,6 +16,7 @@ import { User } from './user.entity';
 import { Course } from './course.entity';
 import { Race } from './race.entity';
 import { TrackPoint } from './track-point.entity';
+import { Certificate } from './certificate.entity';
 
 @Entity('boats')
 export class Boat {
@@ -91,6 +94,14 @@ export class Boat {
 
   @OneToMany(() => TrackPoint, (tp) => tp.boat)
   trackPoints!: TrackPoint[];
+
+  @ManyToMany(() => Certificate, (certificate) => certificate.boats)
+  @JoinTable({
+    name: 'boat_certificates',
+    joinColumn: { name: 'boat_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'certificate_id', referencedColumnName: 'id' },
+  })
+  certificates!: Certificate[];
 
   @BeforeInsert()
   generateId() {

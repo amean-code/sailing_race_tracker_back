@@ -13,7 +13,7 @@ import { User } from '../entities/user.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
 import { TrackPoint } from '../entities/track-point.entity';
-import { RaceStatusEnum, NotificationEventEnum, CourseStatusEnum, UserRoleEnum, ApplicationStatusEnum } from '../common/constants';
+import { RaceStatusEnum, NotificationEventEnum, CourseStatusEnum, UserRoleEnum, ApplicationStatusEnum, RaceTypeEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
 import { serializeRace, RaceLike } from '../common/utils/serialize-race';
 import {
@@ -55,10 +55,27 @@ export class RacesService {
     return serializeRace({ ...race, applicationCount } as RaceLike);
   }
 
+  private assertCommitteeAssigned(race: Race, user: SessionUser) {
+    if (user.role !== UserRoleEnum.COMMITTEE) return;
+    if (race.assignedCommitteeId !== user.sub) {
+      throw new ForbiddenException('Bu yarış size atanmamış.');
+    }
+  }
+
+  private async resolveCommitteeId(committeeId: string): Promise<string> {
+    const referee = await this.usersRepo.findOne({ where: { id: committeeId } });
+    if (!referee || referee.role !== UserRoleEnum.COMMITTEE) {
+      throw new BadRequestException('Geçerli bir hakem seçilmelidir.');
+    }
+    return referee.id;
+  }
+
   async findAllManage(user?: SessionUser, status?: string) {
-    const whereCondition: any = user?.role === UserRoleEnum.COMMITTEE
-      ? { createdById: user.sub }
-      : {};
+    const whereCondition: any = {};
+
+    if (user?.role === UserRoleEnum.COMMITTEE) {
+      whereCondition.assignedCommitteeId = user.sub;
+    }
 
     if (status) {
       const statuses = status.split(',');
@@ -67,7 +84,7 @@ export class RacesService {
 
     const races = await this.racesRepo.find({
       where: whereCondition,
-      relations: ['course'],
+      relations: ['course', 'trophy'],
       order: { startDate: 'ASC' },
     });
     return Promise.all(races.map((r) => this.withCount(r)));
@@ -80,26 +97,30 @@ export class RacesService {
         { status: RaceStatusEnum.IN_PROGRESS },
         { status: RaceStatusEnum.FINISHED },
       ],
-      relations: ['course'],
+      relations: ['course', 'trophy'],
       order: { startDate: 'ASC' },
     });
     return Promise.all(races.map((r) => this.withCount(r)));
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, user?: SessionUser) {
     const race = await this.racesRepo.findOne({
       where: { id },
-      relations: ['course'],
+      relations: ['course', 'trophy'],
     });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
+    if (user) this.assertCommitteeAssigned(race, user);
     return this.withCount(race);
   }
 
   async create(dto: CreateRaceDto, createdById: string) {
-    if (dto.courseId) {
-      const course = await this.coursesRepo.findOne({ where: { id: dto.courseId } });
-      if (!course) throw new NotFoundException('Seçilen parkur bulunamadı.');
+    if (dto.type === RaceTypeEnum.TROFE_LEG) {
+      throw new BadRequestException(
+        'Trofe ayağı oluşturmak için POST /trophies/:id/legs kullanın.',
+      );
     }
+
+    const assignedCommitteeId = await this.resolveCommitteeId(dto.assignedCommitteeId);
 
     const race = this.racesRepo.create({
       title: dto.title,
@@ -113,10 +134,14 @@ export class RacesService {
       capacity: dto.capacity ?? 30,
       status: dto.status ?? RaceStatusEnum.OPEN,
       organizer: dto.organizer ?? null,
-      courseId: dto.courseId ?? null,
-      courseIds: dto.courseIds ?? [],
+      courseId: null,
+      courseIds: [],
       raceState: dto.raceState ?? {},
       createdById,
+      assignedCommitteeId,
+      type: RaceTypeEnum.REGATA,
+      trophyId: null,
+      legOrder: null,
     });
 
     const saved = await this.racesRepo.save(race);
@@ -182,9 +207,7 @@ export class RacesService {
     if (!['COMMITTEE', 'ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
       throw new ForbiddenException('Bu işlem için yetkiniz yok');
     }
-    if (user.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
-      throw new ForbiddenException('Sadece kendi oluşturduğunuz yarışa müdahale edebilirsiniz.');
-    }
+    this.assertCommitteeAssigned(race, user);
 
     const { action, reason } = dto;
 
@@ -251,9 +274,7 @@ export class RacesService {
       if (!user || !['COMMITTEE', 'ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
         throw new ForbiddenException('Bu işlem için yetkiniz yok');
       }
-      if (user.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
-        throw new ForbiddenException('Sadece kendi oluşturduğunuz yarışı düzenleyebilirsiniz.');
-      }
+      this.assertCommitteeAssigned(race, user);
     }
 
     const previousStatus = race.status;
@@ -285,6 +306,13 @@ export class RacesService {
       }
     }
     if (dto.organizer !== undefined) race.organizer = dto.organizer ?? null;
+    if (dto.assignedCommitteeId !== undefined) {
+      if (user && ['ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
+        race.assignedCommitteeId = dto.assignedCommitteeId
+          ? await this.resolveCommitteeId(dto.assignedCommitteeId)
+          : null;
+      }
+    }
     if (dto.courseId !== undefined) {
       if (dto.courseId) {
         const course = await this.coursesRepo.findOne({ where: { id: dto.courseId } });
@@ -356,8 +384,8 @@ export class RacesService {
     const race = await this.racesRepo.findOne({ where: { id } });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
-    if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
-      throw new ForbiddenException('Sadece kendi oluşturduğunuz yarışı silebilirsiniz.');
+    if (!user || !['ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
+      throw new ForbiddenException('Yarış silme yetkisi yalnızca yöneticilerdedir.');
     }
 
     const ctx = {
@@ -389,14 +417,18 @@ export class RacesService {
       status: RaceStatusEnum.DRAFT,
       organizer: race.organizer,
       courseId: race.courseId,
+      courseIds: race.courseIds ?? [],
       raceState: {},
       createdById,
+      type: race.type ?? RaceTypeEnum.REGATA,
+      trophyId: race.trophyId ?? null,
+      legOrder: race.legOrder ?? null,
     });
     const saved = await this.racesRepo.save(clone);
     return this.findOne(saved.id);
   }
 
-  async submitApplication(raceId: string, dto: RaceApplicationDto) {
+  async submitApplication(raceId: string, dto: RaceApplicationDto, user?: SessionUser) {
     const race = await this.racesRepo.findOne({ where: { id: raceId } });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
@@ -423,6 +455,7 @@ export class RacesService {
       club: dto.club ?? null,
       notes: dto.notes ?? null,
       crewMembers: dto.crewMembers ?? null,
+      userId: user?.sub ?? null,
     });
     const saved = await this.applicationsRepo.save(application);
 
@@ -457,10 +490,6 @@ export class RacesService {
       relations: ['course'],
     });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
-
-    if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
-      throw new ForbiddenException('Sadece kendi yarışınıza müdahale edebilirsiniz.');
-    }
 
     const app = await this.applicationsRepo.findOne({
       where: { id: dto.applicationId, raceId },
@@ -784,10 +813,6 @@ export class RacesService {
   async exportRaceResults(id: string, user?: SessionUser): Promise<string> {
     const race = await this.racesRepo.findOne({ where: { id }, relations: ['course'] });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
-
-    if (user?.role === UserRoleEnum.COMMITTEE && race.createdById !== user.sub) {
-      throw new ForbiddenException('Sadece kendi yarışınızın sonuçlarını dışa aktarabilirsiniz.');
-    }
 
     const applications = await this.applicationsRepo.find({
       where: { raceId: id, status: ApplicationStatusEnum.APPROVED },

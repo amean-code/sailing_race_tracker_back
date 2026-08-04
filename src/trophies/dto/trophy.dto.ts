@@ -1,19 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsDateString,
   IsEnum,
   IsInt,
   IsObject,
   IsOptional,
   IsString,
-  IsArray,
   Max,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
-import { RaceStatusEnum, RaceTypeEnum } from '../../common/constants';
+import { RaceStatusEnum, TrophyStatusEnum } from '../../common/constants';
 
-export class CreateRaceDto {
+export class CreateTrophyLegDto {
   @ApiProperty()
   @IsString()
   @MinLength(1)
@@ -24,10 +26,10 @@ export class CreateRaceDto {
   @IsString()
   description?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  location!: string;
+  location?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -53,6 +55,7 @@ export class CreateRaceDto {
 
   @ApiPropertyOptional({ default: 30 })
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(500)
@@ -63,20 +66,15 @@ export class CreateRaceDto {
   @IsEnum(RaceStatusEnum)
   status?: RaceStatusEnum;
 
-  @ApiPropertyOptional({ enum: RaceTypeEnum, default: RaceTypeEnum.REGATA })
-  @IsOptional()
-  @IsEnum(RaceTypeEnum)
-  type?: RaceTypeEnum;
-
-  @ApiProperty({ description: 'Atanan hakem kullanıcı id' })
-  @IsString()
-  @MinLength(1)
-  assignedCommitteeId!: string;
-
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   organizer?: string;
+
+  @ApiProperty({ description: 'Bu ayağa atanan hakem id' })
+  @IsString()
+  @MinLength(1)
+  assignedCommitteeId!: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -91,16 +89,80 @@ export class CreateRaceDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsObject()
-  raceState?: Record<string, unknown>;
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  legOrder?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsObject()
-  courseSnapshot?: Record<string, unknown>;
+  raceState?: Record<string, unknown>;
 }
 
-export class UpdateRaceDto {
+export class CreateTrophyDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  title!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  location!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  venue?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  organizer?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  boatClass?: string;
+
+  @ApiPropertyOptional({ enum: TrophyStatusEnum })
+  @IsOptional()
+  @IsEnum(TrophyStatusEnum)
+  status?: TrophyStatusEnum;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  endDate?: string;
+
+  @ApiPropertyOptional({ description: 'Planlanan ayak sayısı' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  plannedLegCount?: number;
+
+  @ApiPropertyOptional({ type: [CreateTrophyLegDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateTrophyLegDto)
+  legs?: CreateTrophyLegDto[];
+}
+
+export class UpdateTrophyDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -123,117 +185,34 @@ export class UpdateRaceDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsDateString()
-  startDate?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsDateString()
-  endDate?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsDateString()
-  registrationDeadline?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  boatClass?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(500)
-  capacity?: number;
-
-  @ApiPropertyOptional({ enum: RaceStatusEnum })
-  @IsOptional()
-  @IsEnum(RaceStatusEnum)
-  status?: RaceStatusEnum;
-
-  @ApiPropertyOptional()
-  @IsOptional()
   @IsString()
   organizer?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  assignedCommitteeId?: string | null;
+  boatClass?: string;
+
+  @ApiPropertyOptional({ enum: TrophyStatusEnum })
+  @IsOptional()
+  @IsEnum(TrophyStatusEnum)
+  status?: TrophyStatusEnum;
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsString()
-  courseId?: string | null;
-
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  courseIds?: string[];
+  @IsDateString()
+  startDate?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsObject()
-  raceState?: Record<string, unknown>;
+  @IsDateString()
+  endDate?: string | null;
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsObject()
-  courseSnapshot?: Record<string, unknown>;
-}
-
-export class RaceApplicationDto {
-  @ApiProperty()
-  @IsString()
-  @MinLength(1)
-  name!: string;
-
-  @ApiProperty()
-  @IsString()
-  email!: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  phone?: string;
-
-  @ApiProperty()
-  @IsString()
-  @MinLength(1)
-  boatName!: string;
-
-  @ApiProperty()
-  @IsString()
-  @MinLength(1)
-  sailNumber!: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  club?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  notes?: string;
-
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  crewMembers?: string[];
-}
-
-export class RaceActionDto {
-  @ApiProperty({ enum: ['finish', 'abandon', 'restart'] })
-  @IsString()
-  action!: 'finish' | 'abandon' | 'restart';
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  reason?: string;
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  plannedLegCount?: number | null;
 }

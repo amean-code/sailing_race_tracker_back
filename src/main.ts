@@ -7,8 +7,10 @@ import { AppModule } from './app.module';
 import { getAllowedOrigins, getCorsOptions } from './common/config/cors.config';
 import { API_NAME, AUTH_COOKIE } from './common/constants';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { ensureUploadDirs } from './common/upload';
 
 async function bootstrap() {
+  ensureUploadDirs();
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
 

@@ -51,8 +51,9 @@ export class RacesController {
   async submitApplication(
     @Param('id') id: string,
     @Body() dto: RaceApplicationDto,
+    @CurrentUser() user?: SessionUser,
   ) {
-    const application = await this.racesService.submitApplication(id, dto);
+    const application = await this.racesService.submitApplication(id, dto, user);
     return { application };
   }
 
@@ -85,15 +86,15 @@ export class RacesController {
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yarış detayı' })
-  async findOne(@Param('id') id: string) {
-    const race = await this.racesService.findOne(id);
+  async findOne(@Param('id') id: string, @CurrentUser() user: SessionUser) {
+    const race = await this.racesService.findOne(id, user);
     return { race };
   }
 
   @Post()
   @ApiCookieAuth(AUTH_COOKIE)
-  @Roles('COMMITTEE', 'SUPER_ADMIN')
-  @ApiOperation({ summary: 'Yeni yarış oluştur' })
+  @Roles('ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Yeni yarış oluştur (yalnızca admin)' })
   async create(@Body() dto: CreateRaceDto, @CurrentUser() user: SessionUser) {
     const race = await this.racesService.create(dto, user.sub);
     return { race };
@@ -101,8 +102,8 @@ export class RacesController {
 
   @Post(':id/clone')
   @ApiCookieAuth(AUTH_COOKIE)
-  @Roles('COMMITTEE', 'SUPER_ADMIN')
-  @ApiOperation({ summary: 'Yarışı klonla' })
+  @Roles('ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Yarışı klonla (yalnızca admin)' })
   async clone(@Param('id') id: string, @CurrentUser() user: SessionUser) {
     const race = await this.racesService.cloneRace(id, user.sub);
     return { race };
@@ -110,6 +111,7 @@ export class RacesController {
 
   @Patch(':id')
   @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yarış güncelle' })
   async update(
     @Param('id') id: string,
@@ -135,8 +137,8 @@ export class RacesController {
 
   @Delete(':id')
   @ApiCookieAuth(AUTH_COOKIE)
-  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
-  @ApiOperation({ summary: 'Yarış sil (COMMITTEE/ADMIN/SUPER_ADMIN)' })
+  @Roles('ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Yarış sil (yalnızca admin)' })
   async remove(@Param('id') id: string, @CurrentUser() user: SessionUser) {
     return this.racesService.remove(id, user);
   }

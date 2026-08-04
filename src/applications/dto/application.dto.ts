@@ -1,8 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsArray, IsIn, IsOptional, IsString } from 'class-validator';
-import { ApplicationStatusEnum } from '../../common/constants';
+import { ApplicationStatusEnum, PaymentStatusEnum } from '../../common/constants';
 
 const STATUSES = Object.values(ApplicationStatusEnum);
+const PAYMENT_REVIEW = [PaymentStatusEnum.APPROVED, PaymentStatusEnum.REJECTED];
 
 export class UpdateApplicationDto {
   @ApiPropertyOptional({ enum: STATUSES })
@@ -24,4 +25,15 @@ export class BulkUpdateApplicationDto {
   @ApiProperty({ enum: STATUSES })
   @IsIn(STATUSES)
   status!: ApplicationStatusEnum;
+}
+
+export class ReviewPaymentDto {
+  @ApiProperty({ enum: PAYMENT_REVIEW })
+  @IsIn(PAYMENT_REVIEW)
+  status!: PaymentStatusEnum.APPROVED | PaymentStatusEnum.REJECTED;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  note?: string;
 }

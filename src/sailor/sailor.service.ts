@@ -344,7 +344,15 @@ export class SailorService {
       boatId: app.boatId,
       boatName: app.boatName,
       sailNumber: app.sailNumber,
+      crewMembers: app.crewMembers,
       status: app.status,
+      paymentStatus: app.paymentStatus ?? 'NONE',
+      paymentReceiptFileName: app.paymentReceiptFileName,
+      paymentReceiptUrl: app.paymentReceiptPath
+        ? `/api/applications/${app.id}/payment-receipt`
+        : null,
+      paymentNote: app.paymentNote,
+      paymentReviewedAt: app.paymentReviewedAt ? app.paymentReviewedAt.toISOString() : null,
       createdAt: app.createdAt.toISOString(),
       checkedInAt: app.checkedInAt ? app.checkedInAt.toISOString() : null,
     }));

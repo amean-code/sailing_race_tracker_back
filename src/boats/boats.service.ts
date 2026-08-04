@@ -1,8 +1,9 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Boat } from '../entities/boat.entity';
 import { RaceApplication } from '../entities/race-application.entity';
+import { Certificate } from '../entities/certificate.entity';
 import { CreateBoatDto, UpdateBoatDto } from './dto/boat.dto';
 
 @Injectable()
@@ -12,6 +13,8 @@ export class BoatsService {
     private readonly boatsRepo: Repository<Boat>,
     @InjectRepository(RaceApplication)
     private readonly applicationsRepo: Repository<RaceApplication>,
+    @InjectRepository(Certificate)
+    private readonly certificatesRepo: Repository<Certificate>,
   ) {}
 
   serialize(boat: Boat) {
@@ -33,6 +36,15 @@ export class BoatsService {
       width: boat.width,
       color: boat.color,
       crewMembers: boat.crewMembers,
+      certificates: (boat.certificates || []).map((c) => ({
+        id: c.id,
+        type: c.type,
+        title: c.title,
+        fileName: c.fileName,
+        fileUrl: `/api/certificates/${c.id}/file`,
+        expiresAt: c.expiresAt?.toISOString() ?? null,
+      })),
+      certificateIds: (boat.certificates || []).map((c) => c.id),
       createdAt: boat.createdAt.toISOString(),
       updatedAt: boat.updatedAt.toISOString(),
     };
@@ -41,6 +53,7 @@ export class BoatsService {
   async findAll(raceId?: string) {
     const boats = await this.boatsRepo.find({
       where: raceId ? { raceId, isActive: true } : { isActive: true },
+      relations: ['certificates'],
       order: { name: 'ASC' },
     });
     return boats.map((b) => this.serialize(b));
@@ -49,22 +62,36 @@ export class BoatsService {
   async findByUserId(userId: string) {
     const boats = await this.boatsRepo.find({
       where: { userId, isActive: true },
+      relations: ['certificates'],
       order: { createdAt: 'DESC' },
     });
     return boats.map((b) => this.serialize(b));
   }
 
   async findOne(id: string) {
-    const boat = await this.boatsRepo.findOne({ where: { id } });
+    const boat = await this.boatsRepo.findOne({
+      where: { id },
+      relations: ['certificates'],
+    });
     if (!boat) throw new NotFoundException('Tekne bulunamadı');
     return this.serialize(boat);
   }
 
+  private async resolveCertificates(userId: string | null | undefined, ids?: string[]) {
+    if (!ids || ids.length === 0) return [];
+    if (!userId) return [];
+    return this.certificatesRepo.find({
+      where: { userId, id: In(ids) },
+    });
+  }
+
   async create(dto: CreateBoatDto, userId?: string) {
+    const ownerId = dto.userId ?? userId ?? null;
+    const certificates = await this.resolveCertificates(ownerId, dto.certificateIds);
     const boat = this.boatsRepo.create({
       name: dto.name,
       status: dto.status ?? 'idle',
-      userId: dto.userId ?? userId ?? null,
+      userId: ownerId,
       courseId: dto.courseId ?? null,
       raceId: dto.raceId ?? null,
       sailNumber: dto.sailNumber ?? null,
@@ -76,13 +103,17 @@ export class BoatsService {
       width: dto.width ?? null,
       color: dto.color ?? null,
       crewMembers: dto.crewMembers ?? null,
+      certificates,
     });
     const saved = await this.boatsRepo.save(boat);
-    return this.serialize(saved);
+    return this.findOne(saved.id);
   }
 
-  async update(id: string, dto: UpdateBoatDto) {
-    const boat = await this.boatsRepo.findOne({ where: { id } });
+  async update(id: string, dto: UpdateBoatDto, userId?: string) {
+    const boat = await this.boatsRepo.findOne({
+      where: { id },
+      relations: ['certificates'],
+    });
     if (!boat) throw new NotFoundException('Tekne bulunamadı');
     if (dto.name !== undefined) boat.name = dto.name;
     if (dto.status !== undefined) boat.status = dto.status;
@@ -97,8 +128,12 @@ export class BoatsService {
     if (dto.width !== undefined) boat.width = dto.width;
     if (dto.color !== undefined) boat.color = dto.color;
     if (dto.crewMembers !== undefined) boat.crewMembers = dto.crewMembers;
-    const saved = await this.boatsRepo.save(boat);
-    return this.serialize(saved);
+    if (dto.certificateIds !== undefined) {
+      const ownerId = boat.userId ?? userId ?? null;
+      boat.certificates = await this.resolveCertificates(ownerId, dto.certificateIds);
+    }
+    await this.boatsRepo.save(boat);
+    return this.findOne(id);
   }
 
   async remove(id: string) {
@@ -117,7 +152,7 @@ export class BoatsService {
     const boat = await this.boatsRepo.findOne({ where: { id } });
     if (!boat) throw new NotFoundException('Tekne bulunamadı');
     if (boat.userId !== userId) throw new ForbiddenException('Bu tekne size ait değil');
-    
+
     const isUsed = await this.applicationsRepo.count({ where: { boatId: id } });
     if (isUsed > 0) {
       boat.isActive = false;

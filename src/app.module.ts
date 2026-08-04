@@ -19,11 +19,14 @@ import {
   WebhookSubscription,
   AuditLog,
   Setting,
+  Certificate,
+  Trophy,
 } from './entities';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
 import { CoursesModule } from './courses/courses.module';
 import { RacesModule } from './races/races.module';
+import { TrophiesModule } from './trophies/trophies.module';
 import { BoatsModule } from './boats/boats.module';
 import { TrackPointsModule } from './track-points/track-points.module';
 import { ApplicationsModule } from './applications/applications.module';
@@ -41,6 +44,7 @@ import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { TelemetryModule } from './telemetry/telemetry.module';
 import { DemoTestModule } from './demo-test/demo-test.module';
 import { SettingsModule } from './settings/settings.module';
+import { CertificatesModule } from './certificates/certificates.module';
 
 @Module({
   imports: [
@@ -67,6 +71,8 @@ import { SettingsModule } from './settings/settings.module';
           WebhookSubscription,
           AuditLog,
           Setting,
+          Certificate,
+          Trophy,
         ],
         synchronize: true,
         logging: process.env.NODE_ENV === 'production' ? false : ['query', 'error'],
@@ -79,6 +85,7 @@ import { SettingsModule } from './settings/settings.module';
     HealthModule,
     CoursesModule,
     RacesModule,
+    TrophiesModule,
     BoatsModule,
     TrackPointsModule,
     ApplicationsModule,
@@ -92,6 +99,7 @@ import { SettingsModule } from './settings/settings.module';
     TelemetryModule,
     DemoTestModule,
     SettingsModule,
+    CertificatesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
