@@ -61,6 +61,7 @@ export enum ApplicationStatusEnum {
   WITHDRAWN = 'WITHDRAWN',
   DNS = 'DNS',
   DNF = 'DNF',
+  DSQ = 'DSQ',
 }
 
 export enum CertificateTypeEnum {

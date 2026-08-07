@@ -104,6 +104,14 @@ export class ApplicationsService {
       }
       app.status = dto.status;
 
+      if (
+        dto.status === ApplicationStatusEnum.DNS ||
+        dto.status === ApplicationStatusEnum.DNF ||
+        dto.status === ApplicationStatusEnum.DSQ
+      ) {
+        app.finishPosition = null;
+      }
+
       if (dto.status === ApplicationStatusEnum.APPROVED) {
         let boat = await this.boatsRepo.findOne({ where: { applicationId: app.id } });
         if (!boat) {
@@ -155,6 +163,14 @@ export class ApplicationsService {
 
     for (const app of apps) {
       app.status = dto.status;
+
+      if (
+        dto.status === ApplicationStatusEnum.DNS ||
+        dto.status === ApplicationStatusEnum.DNF ||
+        dto.status === ApplicationStatusEnum.DSQ
+      ) {
+        app.finishPosition = null;
+      }
 
       if (dto.status === ApplicationStatusEnum.APPROVED) {
         let boat = await this.boatsRepo.findOne({ where: { applicationId: app.id } });

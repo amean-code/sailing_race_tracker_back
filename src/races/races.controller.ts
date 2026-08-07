@@ -157,7 +157,7 @@ export class RacesController {
 
   @Public()
   @Get(':id/standings')
-  @ApiOperation({ summary: 'Anlık yarış sıralaması' })
+  @ApiOperation({ summary: 'Yarış sonuçları (tekne ve süreler)' })
   async getStandings(@Param('id') id: string) {
     return this.racesService.getStandings(id);
   }

@@ -440,10 +440,15 @@ export class TrophiesService {
         } else if (
           app.status === ApplicationStatusEnum.DNS ||
           app.status === ApplicationStatusEnum.DNF ||
+          app.status === ApplicationStatusEnum.DSQ ||
           isFinished
         ) {
           points = dnsPoints;
-          scored = isFinished || app.status === ApplicationStatusEnum.DNS || app.status === ApplicationStatusEnum.DNF;
+          scored =
+            isFinished ||
+            app.status === ApplicationStatusEnum.DNS ||
+            app.status === ApplicationStatusEnum.DNF ||
+            app.status === ApplicationStatusEnum.DSQ;
         } else {
           points = 0;
           scored = false;
@@ -516,7 +521,7 @@ export class TrophiesService {
       scoring: {
         system: 'low_point',
         description:
-          'Her ayakta bitiş pozisyonu puan olarak sayılır. DNS/DNF ve katılmayanlar için filo sayısı + 1. En düşük toplam üsttedir.',
+          'Her ayakta bitiş pozisyonu puan olarak sayılır. DNS/DNF/DSQ ve katılmayanlar için filo sayısı + 1. En düşük toplam üsttedir.',
       },
       legs: legs.map((leg) => ({
         id: leg.id,

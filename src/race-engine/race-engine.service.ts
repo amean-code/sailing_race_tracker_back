@@ -6,6 +6,7 @@ import { Race } from '../entities/race.entity';
 import { Course } from '../entities/course.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
+import { TrackPoint } from '../entities/track-point.entity';
 import { RacesService } from '../races/races.service';
 import * as turf from '@turf/turf';
 
@@ -21,6 +22,7 @@ export class RaceEngineService {
     @InjectRepository(Course) private coursesRepo: Repository<Course>,
     @InjectRepository(RaceApplication) private applicationsRepo: Repository<RaceApplication>,
     @InjectRepository(CheckpointPass) private checkpointPassRepo: Repository<CheckpointPass>,
+    @InjectRepository(TrackPoint) private trackPointsRepo: Repository<TrackPoint>,
     private racesService: RacesService,
     private eventEmitter: EventEmitter2,
   ) {}
@@ -46,14 +48,49 @@ export class RaceEngineService {
     }
   }
 
+  /** After server restart, seed previous position from DB so line crosses still work. */
+  private async hydrateBoatState(boatId: string, raceId: string) {
+    if (this.boatStates.has(boatId)) return this.boatStates.get(boatId);
+
+    const lastPoint = await this.trackPointsRepo.findOne({
+      where: { boatId, raceId },
+      order: { recordedAt: 'DESC' },
+    });
+    if (!lastPoint) return undefined;
+
+    const seeded = {
+      lat: lastPoint.lat,
+      lng: lastPoint.lng,
+      heading: lastPoint.heading ?? 0,
+      recordedAt: lastPoint.recordedAt.toISOString(),
+    };
+    this.boatStates.set(boatId, seeded);
+    return seeded;
+  }
+
   private async processTrackPoint(raceId: string, boatId: string, lat: number, lng: number, heading: number, recordedAt: string) {
     // Always update memory state first so we have a valid previousState for line intersection when race starts
-    const previousState = this.boatStates.get(boatId);
+    let previousState = this.boatStates.get(boatId);
+    if (!previousState) {
+      previousState = await this.hydrateBoatState(boatId, raceId);
+      // If we just hydrated the exact same latest point, skip using it as previous
+      // (the incoming point may be a duplicate/near-duplicate of the last DB row)
+      if (
+        previousState &&
+        Math.abs(previousState.lat - lat) < 1e-9 &&
+        Math.abs(previousState.lng - lng) < 1e-9
+      ) {
+        previousState = undefined;
+      }
+    }
+
     this.boatStates.set(boatId, {
       lat,
       lng,
       heading,
       recordedAt,
+      minDistance: previousState?.minDistance,
+      closestSide: previousState?.closestSide,
     });
 
     // 1. Get Active Race Application

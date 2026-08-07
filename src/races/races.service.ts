@@ -3,7 +3,10 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -29,7 +32,11 @@ import { MailService } from '../notifications/mail.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 @Injectable()
-export class RacesService {
+export class RacesService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RacesService.name);
+  private scheduledStartTimer: ReturnType<typeof setInterval> | null = null;
+  private processingScheduledStarts = false;
+
   constructor(
     @InjectRepository(Race)
     private readonly racesRepo: Repository<Race>,
@@ -47,6 +54,107 @@ export class RacesService {
     private readonly mailService: MailService,
     private eventEmitter: EventEmitter2,
   ) { }
+
+  onModuleInit() {
+    // Server-side auto-start so scheduled races fire even if the committee browser is closed/refreshed
+    this.scheduledStartTimer = setInterval(() => {
+      void this.processDueScheduledStarts();
+    }, 2000);
+  }
+
+  onModuleDestroy() {
+    if (this.scheduledStartTimer) {
+      clearInterval(this.scheduledStartTimer);
+      this.scheduledStartTimer = null;
+    }
+  }
+
+  private mergeRaceState(
+    current: Record<string, unknown> | null | undefined,
+    patch: Record<string, unknown> | null | undefined,
+  ): Record<string, unknown> {
+    const merged: Record<string, unknown> = { ...(current ?? {}) };
+    for (const [key, value] of Object.entries(patch ?? {})) {
+      if (value === null) {
+        delete merged[key];
+      } else {
+        merged[key] = value;
+      }
+    }
+    return merged;
+  }
+
+  private emitRaceUpdated(race: Race, applicationCount?: number) {
+    const serialized = serializeRace({
+      ...race,
+      applicationCount: applicationCount ?? 0,
+    } as RaceLike);
+    this.eventEmitter.emit('race.updated', {
+      raceId: race.id,
+      status: race.status,
+      raceState: race.raceState ?? {},
+      courseSnapshot: race.courseSnapshot ?? null,
+      race: serialized,
+    });
+  }
+
+  /** Start OPEN races whose scheduledStartAt has passed (persisted countdown). */
+  async processDueScheduledStarts() {
+    if (this.processingScheduledStarts) return;
+    this.processingScheduledStarts = true;
+    try {
+      const openRaces = await this.racesRepo.find({
+        where: { status: RaceStatusEnum.OPEN },
+        relations: ['course'],
+      });
+      const now = Date.now();
+      for (const race of openRaces) {
+        const scheduledIso = race.raceState?.scheduledStartAt;
+        if (typeof scheduledIso !== 'string') continue;
+        const fireAt = new Date(scheduledIso).getTime();
+        if (!Number.isFinite(fireAt) || fireAt > now) continue;
+        try {
+          await this.startRaceAtScheduledTime(race);
+        } catch (err: any) {
+          this.logger.error(`Scheduled start failed for race ${race.id}: ${err?.message || err}`);
+        }
+      }
+    } finally {
+      this.processingScheduledStarts = false;
+    }
+  }
+
+  private async startRaceAtScheduledTime(race: Race) {
+    // Re-read to avoid racing with a concurrent committee start
+    const fresh = await this.racesRepo.findOne({
+      where: { id: race.id },
+      relations: ['course'],
+    });
+    if (!fresh || fresh.status !== RaceStatusEnum.OPEN) return;
+    if (typeof fresh.raceState?.scheduledStartAt !== 'string') return;
+
+    const startedAt = new Date().toISOString();
+    fresh.status = RaceStatusEnum.IN_PROGRESS;
+
+    if (!fresh.courseSnapshot && fresh.courseId) {
+      const courseForSnapshot =
+        fresh.course ||
+        (await this.coursesRepo.findOne({ where: { id: fresh.courseId } }));
+      if (courseForSnapshot) {
+        fresh.courseSnapshot = JSON.parse(JSON.stringify(courseForSnapshot));
+      }
+    }
+
+    const state = { ...(fresh.raceState || {}) };
+    state.startedAt = startedAt;
+    delete state.scheduledStartAt;
+    fresh.raceState = state;
+
+    const saved = await this.racesRepo.save(fresh);
+    this.logger.log(`Race ${saved.id} auto-started from scheduledStartAt`);
+    this.eventEmitter.emit('race.started', { raceId: saved.id });
+    this.emitRaceUpdated(saved);
+  }
 
   private async withCount(race: Race) {
     const applicationCount = await this.applicationsRepo.count({
@@ -238,6 +346,7 @@ export class RacesService {
       }
       race.raceState = state;
       await this.racesRepo.save(race);
+      await this.finalizeRaceResults(race.id);
     } else if (action === 'restart') {
       race.status = RaceStatusEnum.OPEN;
       const state = { ...(race.raceState || {}) };
@@ -247,6 +356,7 @@ export class RacesService {
       delete state.statusBeforeCancel;
       delete state.finishedAt;
       delete state.durationSeconds;
+      delete state.scheduledStartAt;
       state.restartReason = reason;
       race.raceState = state;
 
@@ -261,21 +371,32 @@ export class RacesService {
       throw new BadRequestException('Geçersiz işlem');
     }
 
-    return this.racesRepo.findOne({ where: { id }, relations: ['course'] });
+    const saved = await this.racesRepo.findOne({ where: { id }, relations: ['course'] });
+    if (saved) {
+      this.emitRaceUpdated(saved);
+      if (action === 'finish') {
+        this.eventEmitter.emit('race.finished', {
+          raceId: saved.id,
+          userId: user.sub,
+        });
+      } else if (action === 'abandon') {
+        this.eventEmitter.emit('race.cancelled', {
+          raceId: saved.id,
+          userId: user.sub,
+        });
+      }
+    }
+    return this.findOne(id);
   }
 
   async update(id: string, dto: UpdateRaceDto, user?: SessionUser) {
     const race = await this.racesRepo.findOne({ where: { id } });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
-    const isDemoRace = race.title === 'DEMO TEST RACE';
-
-    if (!isDemoRace) {
-      if (!user || !['COMMITTEE', 'ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
-        throw new ForbiddenException('Bu işlem için yetkiniz yok');
-      }
-      this.assertCommitteeAssigned(race, user);
+    if (!user || !['COMMITTEE', 'ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
+      throw new ForbiddenException('Bu işlem için yetkiniz yok');
     }
+    this.assertCommitteeAssigned(race, user);
 
     const previousStatus = race.status;
 
@@ -324,7 +445,7 @@ export class RacesService {
       race.courseIds = dto.courseIds ?? [];
     }
     if (dto.raceState !== undefined) {
-      race.raceState = { ...(race.raceState ?? {}), ...(dto.raceState ?? {}) };
+      race.raceState = this.mergeRaceState(race.raceState, dto.raceState);
     }
     
     let courseSnapshotChanged = false;
@@ -338,6 +459,19 @@ export class RacesService {
       if (courseForSnapshot) {
         race.courseSnapshot = JSON.parse(JSON.stringify(courseForSnapshot));
       }
+    }
+
+    // Clear any pending schedule when the race actually starts
+    if (
+      dto.status === RaceStatusEnum.IN_PROGRESS &&
+      previousStatus !== RaceStatusEnum.IN_PROGRESS
+    ) {
+      const state = { ...(race.raceState || {}) };
+      delete state.scheduledStartAt;
+      if (!state.startedAt) {
+        state.startedAt = new Date().toISOString();
+      }
+      race.raceState = state;
     }
 
     const saved = await this.racesRepo.save(race);
@@ -377,6 +511,7 @@ export class RacesService {
       });
     }
 
+    this.emitRaceUpdated(saved);
     return result;
   }
 
@@ -528,12 +663,73 @@ export class RacesService {
     return { ok: true, id: saved.id, rank };
   }
 
+  private getRaceTargets(race: Race): any[] {
+    const checkpoints =
+      (race.courseSnapshot?.checkpoints as any[]) ??
+      (race.course?.checkpoints as any[]) ??
+      [];
+    return checkpoints.filter((cp) => {
+      const k = cp.kind || cp.type;
+      return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
+    });
+  }
+
+  /**
+   * Dynamic race result status from checkpoint progress.
+   * DNS = never crossed start; DNF = started but race ended before finish;
+   * DSQ = manual disqualification (preserved when already stored).
+   * Persisted only on finalize so live GPS tracking keeps working.
+   */
+  private deriveResultStatus(opts: {
+    storedStatus: string;
+    maxCpIndex: number;
+    finishIndex: number;
+    raceOver: boolean;
+  }): string {
+    const { storedStatus, maxCpIndex, finishIndex, raceOver } = opts;
+    if (storedStatus === ApplicationStatusEnum.WITHDRAWN) {
+      return ApplicationStatusEnum.WITHDRAWN;
+    }
+    if (storedStatus === ApplicationStatusEnum.PENDING) {
+      return ApplicationStatusEnum.PENDING;
+    }
+    // Manual / already-finalized penalties win over derived progress
+    if (storedStatus === ApplicationStatusEnum.DSQ) {
+      return ApplicationStatusEnum.DSQ;
+    }
+    if (
+      raceOver &&
+      (storedStatus === ApplicationStatusEnum.DNS || storedStatus === ApplicationStatusEnum.DNF)
+    ) {
+      return storedStatus;
+    }
+
+    const finished = finishIndex >= 0 && maxCpIndex === finishIndex;
+    const started = maxCpIndex >= 0;
+
+    if (finished) return 'FINISHED';
+    if (!started) {
+      return raceOver ? ApplicationStatusEnum.DNS : 'NOT_STARTED';
+    }
+    // Started but incomplete when race ends → DNF (yarıda kalan)
+    return raceOver ? ApplicationStatusEnum.DNF : 'RACING';
+  }
+
   async getStandings(raceId: string, user?: SessionUser) {
     const race = await this.racesRepo.findOne({ where: { id: raceId }, relations: ['course'] });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId, status: ApplicationStatusEnum.APPROVED },
+      where: {
+        raceId,
+        status: In([
+          ApplicationStatusEnum.APPROVED,
+          ApplicationStatusEnum.CHECKED_IN,
+          ApplicationStatusEnum.DNS,
+          ApplicationStatusEnum.DNF,
+          ApplicationStatusEnum.DSQ,
+        ]),
+      },
       relations: ['boat'],
       order: { createdAt: 'ASC' },
     });
@@ -558,17 +754,10 @@ export class RacesService {
     }
 
     const raceStartedAt = race.raceState?.startedAt as string | undefined;
-
-    let finishIndex = -1;
-    // Prefer courseSnapshot so finish index matches what was active when race started
-    const standingsCheckpoints = (race.courseSnapshot?.checkpoints as any[]) ?? (race.course?.checkpoints as any[]) ?? null;
-    if (standingsCheckpoints) {
-      const targets = standingsCheckpoints.filter(cp => {
-        const k = cp.kind || cp.type;
-        return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
-      });
-      finishIndex = targets.length - 1;
-    }
+    const targets = this.getRaceTargets(race);
+    const finishIndex = targets.length > 0 ? targets.length - 1 : -1;
+    const raceOver =
+      race.status === RaceStatusEnum.FINISHED || race.status === RaceStatusEnum.CANCELLED;
 
     const standings = applications.map((app) => {
       const best = bestPassByApp.get(app.id) ?? null;
@@ -579,7 +768,14 @@ export class RacesService {
         ? Math.floor((Date.now() - new Date(raceStartedAt).getTime()) / 1000)
         : null;
 
-      const isFinished = best?.checkpointIndex === finishIndex && finishIndex !== -1;
+      const maxCpIndex = best?.checkpointIndex ?? -1;
+      const isFinished = finishIndex >= 0 && maxCpIndex === finishIndex;
+      const resultStatus = this.deriveResultStatus({
+        storedStatus: String(app.status),
+        maxCpIndex,
+        finishIndex,
+        raceOver,
+      });
 
       return {
         applicationId: app.id,
@@ -587,7 +783,7 @@ export class RacesService {
         boatName: app.boatName,
         competitorName: app.name,
         displayColor: app.boat?.displayColor ?? null,
-        checkpointIndex: best?.checkpointIndex ?? -1,
+        checkpointIndex: maxCpIndex,
         checkpointId: best?.checkpointId ?? null,
         elapsedSeconds: best?.elapsedSeconds ?? null,
         rank: best?.rank ?? null,
@@ -599,14 +795,29 @@ export class RacesService {
           elapsedSeconds: p.elapsedSeconds,
           rank: p.rank,
         })),
-        status: app.status,
+        status: resultStatus,
+        storedStatus: app.status,
         finishPosition: app.finishPosition,
         finished: isFinished,
       };
     });
 
-    // Sort by checkpointIndex DESC, then elapsedSeconds ASC
+    const isPenalty = (status: string) =>
+      status === ApplicationStatusEnum.DNS ||
+      status === ApplicationStatusEnum.DNF ||
+      status === ApplicationStatusEnum.DSQ ||
+      status === 'NOT_STARTED';
+
     standings.sort((a, b) => {
+      const aPen = isPenalty(String(a.status));
+      const bPen = isPenalty(String(b.status));
+      if (aPen !== bPen) return aPen ? 1 : -1;
+      if (a.finished && b.finished) {
+        if (a.elapsedSeconds != null && b.elapsedSeconds != null) {
+          return a.elapsedSeconds - b.elapsedSeconds;
+        }
+      }
+      if (a.finished !== b.finished) return a.finished ? -1 : 1;
       if (b.checkpointIndex !== a.checkpointIndex) return b.checkpointIndex - a.checkpointIndex;
       if (a.elapsedSeconds != null && b.elapsedSeconds != null) return a.elapsedSeconds - b.elapsedSeconds;
       return 0;
@@ -631,25 +842,30 @@ export class RacesService {
     });
     if (!race) return;
 
-    // Prefer courseSnapshot (taken when race started) over live course to avoid mismatch
-    const checkpoints = (race.courseSnapshot?.checkpoints as any[]) ?? (race.course?.checkpoints as any[]) ?? null;
-    if (!checkpoints || checkpoints.length === 0) return;
+    const targets = this.getRaceTargets(race);
+    if (targets.length === 0) return;
 
-    const finishIndex = checkpoints.length - 1;
+    const finishIndex = targets.length - 1;
 
-    // Fetch only approved applications (participants who actually raced)
     const apps = await this.applicationsRepo.find({
-      where: { raceId, status: ApplicationStatusEnum.APPROVED },
+      where: {
+        raceId,
+        status: In([
+          ApplicationStatusEnum.APPROVED,
+          ApplicationStatusEnum.CHECKED_IN,
+          ApplicationStatusEnum.DNS,
+          ApplicationStatusEnum.DNF,
+          ApplicationStatusEnum.DSQ,
+        ]),
+      },
     });
 
     if (apps.length === 0) return;
 
-    // Fetch all checkpoint passes for this race
     const allPasses = await this.checkpointPassRepo.find({
       where: { raceId },
     });
 
-    // Group passes by application ID
     const passesByApp: Record<string, CheckpointPass[]> = {};
     for (const pass of allPasses) {
       if (!passesByApp[pass.applicationId]) {
@@ -658,14 +874,10 @@ export class RacesService {
       passesByApp[pass.applicationId].push(pass);
     }
 
-    // Rank applicants
     const rankedApps = apps.map((app) => {
       const appPasses = passesByApp[app.id] || [];
-
-      // Check if crossed finish line
       const finishPass = appPasses.find((p) => p.checkpointIndex === finishIndex);
 
-      // Get maximum checkpoint index passed
       let maxCpIndex = -1;
       let maxCpElapsed = 0;
       for (const p of appPasses) {
@@ -675,19 +887,23 @@ export class RacesService {
         }
       }
 
+      const resultStatus = this.deriveResultStatus({
+        storedStatus: String(app.status),
+        maxCpIndex,
+        finishIndex,
+        raceOver: true,
+      });
+
       return {
         app,
         finished: !!finishPass,
         finishElapsed: finishPass ? (finishPass.elapsedSeconds ?? Infinity) : Infinity,
         maxCpIndex,
         maxCpElapsed,
+        resultStatus,
       };
     });
 
-    // Sort: 
-    // 1. Finished boats sorted by finish time (ascending)
-    // 2. Unfinished boats sorted by furthest checkpoint (descending) and time at that checkpoint (ascending)
-    // 3. Didn't start sorted by application id
     rankedApps.sort((a, b) => {
       if (a.finished && b.finished) {
         return a.finishElapsed - b.finishElapsed;
@@ -696,78 +912,69 @@ export class RacesService {
       if (b.finished) return 1;
 
       if (a.maxCpIndex !== b.maxCpIndex) {
-        return b.maxCpIndex - a.maxCpIndex; // Furthest checkpoint first
+        return b.maxCpIndex - a.maxCpIndex;
       }
 
       if (a.maxCpIndex !== -1) {
-        return a.maxCpElapsed - b.maxCpElapsed; // Quickest time at that checkpoint first
+        return a.maxCpElapsed - b.maxCpElapsed;
       }
 
       return a.app.id.localeCompare(b.app.id);
     });
 
-    // Save final rankings in DB
     const fleetSize = apps.length;
-    for (let i = 0; i < rankedApps.length; i++) {
-      const item = rankedApps[i];
-      item.app.finishPosition = i + 1;
+    let finishPlace = 0;
+    for (const item of rankedApps) {
       item.app.fleetSize = fleetSize;
+
+      if (item.resultStatus === 'FINISHED') {
+        finishPlace += 1;
+        item.app.status = ApplicationStatusEnum.APPROVED;
+        item.app.finishPosition = finishPlace;
+      } else if (item.resultStatus === ApplicationStatusEnum.DNS) {
+        item.app.status = ApplicationStatusEnum.DNS;
+        item.app.finishPosition = null;
+      } else if (item.resultStatus === ApplicationStatusEnum.DSQ) {
+        item.app.status = ApplicationStatusEnum.DSQ;
+        item.app.finishPosition = null;
+      } else if (item.resultStatus === ApplicationStatusEnum.DNF) {
+        item.app.status = ApplicationStatusEnum.DNF;
+        item.app.finishPosition = null;
+      }
+
       await this.applicationsRepo.save(item.app);
     }
 
     if (race.createdById) {
       const referee = await this.usersRepo.findOne({ where: { id: race.createdById } });
       if (referee && referee.email) {
-        this.sendResultsEmail(race, referee, rankedApps).catch(e => 
-          console.error('Sonuç maili gönderilemedi:', e)
+        this.sendResultsEmail(race, referee, rankedApps).catch((e) =>
+          console.error('Sonuç maili gönderilemedi:', e),
         );
       }
     }
   }
 
   private async sendResultsEmail(race: Race, referee: User, rankedApps: any[]) {
-    const top3 = rankedApps.slice(0, 3).filter(item => item.finished);
-
     let html = `
     <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.08); border: 1px solid #e2e8f0;">
       <!-- Header -->
       <div style="background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 35px 20px; text-align: center;">
         <h1 style="color: #ffffff; margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.5px;">⛵ ${race.title}</h1>
-        <p style="color: #bfdbfe; margin: 10px 0 0 0; font-size: 16px; font-weight: 500;">Yarış Sonuçları Kesinleşti</p>
+        <p style="color: #bfdbfe; margin: 10px 0 0 0; font-size: 16px; font-weight: 500;">Yarış Sonuçları</p>
       </div>
       
       <!-- Body -->
       <div style="padding: 35px 30px;">
         <p style="color: #334155; font-size: 16px; line-height: 1.6; margin-top: 0;">Sayın <strong>${referee.name || 'Hakem'}</strong>,</p>
-        <p style="color: #475569; font-size: 15px; line-height: 1.6;">Yönetmekte olduğunuz yarış başarıyla sonlandırılmıştır. Aşağıda yarışa ait kesinleşen sıralama detaylarını bulabilirsiniz:</p>
-        
-        <!-- Top 3 Podium -->
-        ${top3.length > 0 ? `
-        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px 25px; margin: 25px 0;">
-          <h3 style="color: #0f172a; font-size: 17px; margin: 0 0 15px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">🏆 Dereceye Girenler</h3>
-          <ul style="list-style: none; padding: 0; margin: 0;">
-            ${top3.map((item, index) => {
-              const medalColors = ['#d97706', '#64748b', '#b45309']; // Gold, Silver, Bronze
-              const color = medalColors[index] || '#334155';
-              return `
-                <li style="padding: 10px 0; border-bottom: ${index === top3.length - 1 ? 'none' : '1px solid #e2e8f0'}; color: #334155; display: flex; align-items: center; font-size: 15px;">
-                  <strong style="color: ${color}; font-size: 18px; margin-right: 10px; min-width: 25px;">${index + 1}.</strong> 
-                  <span style="flex: 1;"><strong>${item.app.boatName || 'Belirtilmedi'}</strong> (${item.app.name || 'İsimsiz'})</span>
-                  <span style="background: #eff6ff; color: #1d4ed8; padding: 4px 10px; border-radius: 20px; font-weight: 600; font-size: 13px;">${item.finishElapsed} sn</span>
-                </li>
-              `;
-            }).join('')}
-          </ul>
-        </div>
-        ` : ''}
+        <p style="color: #475569; font-size: 15px; line-height: 1.6;">Yönetmekte olduğunuz yarış başarıyla sonlandırılmıştır. Tekne süreleri aşağıdadır:</p>
 
         <!-- Full Results Table -->
-        <h3 style="color: #0f172a; font-size: 17px; margin: 30px 0 15px 0;">📋 Tüm Sıralama</h3>
+        <h3 style="color: #0f172a; font-size: 17px; margin: 30px 0 15px 0;">📋 Yarış Sonuçları</h3>
         <div style="border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;">
           <table style="width: 100%; border-collapse: collapse; font-size: 14px; text-align: left;">
             <thead>
               <tr style="background-color: #f1f5f9; color: #475569;">
-                <th style="padding: 14px 16px; font-weight: 600; border-bottom: 2px solid #e2e8f0;">Sıra</th>
                 <th style="padding: 14px 16px; font-weight: 600; border-bottom: 2px solid #e2e8f0;">Tekne</th>
                 <th style="padding: 14px 16px; font-weight: 600; border-bottom: 2px solid #e2e8f0;">Yarışmacı</th>
                 <th style="padding: 14px 16px; font-weight: 600; border-bottom: 2px solid #e2e8f0; text-align: right;">Süre / Durum</th>
@@ -777,13 +984,21 @@ export class RacesService {
               ${rankedApps.map((item, index) => {
                 const isEven = index % 2 === 0;
                 const bg = isEven ? '#ffffff' : '#f8fafc';
-                const timeOrStatus = item.finished ? 
-                  `<span style="color: #166534; font-weight: 600;">${this.formatElapsed(item.finishElapsed)}</span>` : 
-                  `<span style="color: #dc2626; font-weight: 600;">Tamamlayamadı</span>`;
+                let timeOrStatus: string;
+                if (item.finished) {
+                  timeOrStatus = `<span style="color: #166534; font-weight: 600;">${this.formatElapsed(item.finishElapsed)}</span>`;
+                } else if (item.resultStatus === ApplicationStatusEnum.DNS) {
+                  timeOrStatus = `<span style="color: #b91c1c; font-weight: 600;">DNS</span>`;
+                } else if (item.resultStatus === ApplicationStatusEnum.DNF) {
+                  timeOrStatus = `<span style="color: #c2410c; font-weight: 600;">DNF</span>`;
+                } else if (item.resultStatus === ApplicationStatusEnum.DSQ) {
+                  timeOrStatus = `<span style="color: #9d174d; font-weight: 600;">DSQ</span>`;
+                } else {
+                  timeOrStatus = `<span style="color: #dc2626; font-weight: 600;">${item.resultStatus || '—'}</span>`;
+                }
                 
                 return `
                 <tr style="background-color: ${bg}; border-bottom: 1px solid #e2e8f0;">
-                  <td style="padding: 14px 16px; font-weight: bold; color: #334155;">#${item.app.finishPosition}</td>
                   <td style="padding: 14px 16px; color: #475569;">${item.app.boatName || '—'}</td>
                   <td style="padding: 14px 16px; color: #475569;">${item.app.name || '—'}</td>
                   <td style="padding: 14px 16px; text-align: right;">${timeOrStatus}</td>
@@ -804,8 +1019,8 @@ export class RacesService {
 
     await this.mailService.sendMail(
       referee.email,
-      `${race.title} — Kesinleşen Yarış Sonuçları`,
-      'Yarış başarıyla tamamlandı ve sonuçlar kesinleşti. Lütfen e-postayı HTML destekleyen bir istemcide görüntüleyin.',
+      `${race.title} — Yarış Sonuçları`,
+      'Yarış başarıyla tamamlandı. Lütfen e-postayı HTML destekleyen bir istemcide görüntüleyin.',
       html
     );
   }
@@ -815,7 +1030,16 @@ export class RacesService {
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId: id, status: ApplicationStatusEnum.APPROVED },
+      where: {
+        raceId: id,
+        status: In([
+          ApplicationStatusEnum.APPROVED,
+          ApplicationStatusEnum.CHECKED_IN,
+          ApplicationStatusEnum.DNS,
+          ApplicationStatusEnum.DNF,
+          ApplicationStatusEnum.DSQ,
+        ]),
+      },
       order: { finishPosition: 'ASC' },
       relations: ['boat'],
     });
@@ -826,13 +1050,29 @@ export class RacesService {
 
     const finishIndex = (race.course?.checkpoints as any[])?.length ? (race.course?.checkpoints as any[]).length - 1 : -1;
 
-    const headers = ['Sıra', 'Tekne Adı', 'Yelken No', 'Sınıf', 'Yarışmacı', 'Bitiş Zamanı', 'Geçen Süre'];
+    const headers = ['Tekne Adı', 'Yelken No', 'Sınıf', 'Yarışmacı', 'Durum', 'Bitiş Zamanı', 'Geçen Süre'];
     
     const rows = applications.map(app => {
       const appPasses = allPasses.filter(p => p.applicationId === app.id);
       const finishPass = appPasses.find(p => p.checkpointIndex === finishIndex);
       
-      const finishPos = app.finishPosition ? String(app.finishPosition) : 'DNF/DNS';
+      const penaltyStatuses = [
+        ApplicationStatusEnum.DNS,
+        ApplicationStatusEnum.DNF,
+        ApplicationStatusEnum.DSQ,
+      ];
+      let statusLabel: string;
+      if (penaltyStatuses.includes(app.status as ApplicationStatusEnum)) {
+        statusLabel = String(app.status);
+      } else if (finishPass) {
+        statusLabel = 'FINISHED';
+      } else if (app.status === ApplicationStatusEnum.PENDING) {
+        statusLabel = 'WFA';
+      } else if (app.status === ApplicationStatusEnum.WITHDRAWN) {
+        statusLabel = 'WITHDRAWN';
+      } else {
+        statusLabel = String(app.status || '—');
+      }
       
       let finishTime = '-';
       let elapsedStr = '-';
@@ -848,11 +1088,11 @@ export class RacesService {
       }
 
       return [
-        `"${finishPos}"`,
         `"${app.boatName || ''}"`,
         `"${app.sailNumber || ''}"`,
         `"${app.boat?.boatClass || ''}"`,
         `"${app.name || ''}"`,
+        `"${statusLabel}"`,
         `"${finishTime}"`,
         `"${elapsedStr}"`
       ].join(';');

@@ -56,6 +56,14 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  @OnEvent('race.started')
+  handleRaceStarted(payload: any) {
+    if (payload.raceId) {
+      this.server.to(payload.raceId).emit('race.started', payload);
+      this.server.to(payload.raceId).emit('race.updated', payload);
+    }
+  }
+
   @OnEvent('boat.position.updated')
   handleBoatPositionUpdated(payload: any) {
     if (payload.raceId) {
@@ -95,6 +103,13 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   handleRaceFinished(payload: any) {
     if (payload.raceId) {
       this.server.to(payload.raceId).emit('race.finished', payload);
+    }
+  }
+
+  @OnEvent('race.cancelled')
+  handleRaceCancelled(payload: any) {
+    if (payload.raceId) {
+      this.server.to(payload.raceId).emit('race.updated', payload);
     }
   }
 

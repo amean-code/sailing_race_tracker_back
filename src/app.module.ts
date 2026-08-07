@@ -42,7 +42,6 @@ import { RaceEngineModule } from './race-engine/race-engine.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { TelemetryModule } from './telemetry/telemetry.module';
-import { DemoTestModule } from './demo-test/demo-test.module';
 import { SettingsModule } from './settings/settings.module';
 import { CertificatesModule } from './certificates/certificates.module';
 
@@ -97,7 +96,6 @@ import { CertificatesModule } from './certificates/certificates.module';
     WebhooksModule,
     AuditLogsModule,
     TelemetryModule,
-    DemoTestModule,
     SettingsModule,
     CertificatesModule,
   ],

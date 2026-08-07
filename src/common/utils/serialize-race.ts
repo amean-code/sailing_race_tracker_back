@@ -33,6 +33,7 @@ export type RaceLike = {
   courseId: string | null;
   courseIds?: string[];
   course?: CourseLike | null;
+  courseSnapshot?: Record<string, unknown> | null;
   raceState?: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
@@ -143,6 +144,7 @@ export function serializeRace(race: RaceLike) {
     courseId: race.courseId,
     courseIds: (race as any).courseIds ?? [],
     course: race.course ? serializeCourse(race.course) : null,
+    courseSnapshot: race.courseSnapshot ?? null,
     raceState: race.raceState ?? {},
     appliedCount,
     spotsLeft,

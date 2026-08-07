@@ -16,6 +16,7 @@ type RaceWithApplication = {
     boatName: string;
     sailNumber: string;
     club: string | null;
+    status: string;
     createdAt: string;
     finishPosition: number | null;
     fleetSize: number | null;
@@ -49,6 +50,7 @@ export class SailorService {
       boatName: app.boatName,
       sailNumber: app.sailNumber,
       club: app.club,
+      status: app.status,
       createdAt: app.createdAt.toISOString(),
       finishPosition: app.finishPosition,
       fleetSize: app.fleetSize,
@@ -73,24 +75,42 @@ export class SailorService {
 
   async getActiveRace(user: SessionUser) {
     const email = user.email.toLowerCase();
+    // Include DNS/DNF/DSQ so sailors still see the "race finished" screen after finalizeRaceResults
     const applications = await this.applicationsRepo.find({
       where: [
         { email, status: ApplicationStatusEnum.PENDING },
         { email, status: ApplicationStatusEnum.APPROVED },
+        { email, status: ApplicationStatusEnum.CHECKED_IN },
+        { email, status: ApplicationStatusEnum.DNS },
+        { email, status: ApplicationStatusEnum.DNF },
+        { email, status: ApplicationStatusEnum.DSQ },
       ],
-      relations: ['race'],
+      relations: ['race', 'race.course'],
       order: { checkedInAt: 'DESC', createdAt: 'DESC' },
     });
 
+    const liveAppStatuses = new Set([
+      ApplicationStatusEnum.PENDING,
+      ApplicationStatusEnum.APPROVED,
+      ApplicationStatusEnum.CHECKED_IN,
+    ]);
+    const resultWindowMs = 15 * 60 * 1000;
+
     const activeList = applications.filter((app) => {
       if (!app.race) return false;
-      if (app.race.status === RaceStatusEnum.IN_PROGRESS || app.race.status === RaceStatusEnum.OPEN) return true;
-      if (app.race.status === RaceStatusEnum.FINISHED) {
-        // Include FINISHEDED races that were updated in the last 15 minutes so clients can see the result popup
-        const updatedTime = new Date(app.race.updatedAt).getTime();
-        const now = Date.now();
-        if (now - updatedTime < 15 * 60 * 1000) return true;
+      const raceStatus = app.race.status;
+
+      if (raceStatus === RaceStatusEnum.IN_PROGRESS || raceStatus === RaceStatusEnum.OPEN) {
+        // Mid-race: only applications still eligible to race / track
+        return liveAppStatuses.has(app.status as ApplicationStatusEnum);
       }
+
+      if (raceStatus === RaceStatusEnum.FINISHED || raceStatus === RaceStatusEnum.CANCELLED) {
+        // Keep recently closed races so every sailor (incl. DNS/DNF/DSQ) gets the end screen
+        const updatedTime = new Date(app.race.updatedAt).getTime();
+        return Date.now() - updatedTime < resultWindowMs;
+      }
+
       return false;
     });
 
@@ -120,9 +140,20 @@ export class SailorService {
       const tracking = (raceState.tracking as Record<string, unknown> | undefined) ?? {};
       const startedAt = (raceState.startedAt as string | undefined) ?? null;
       const scheduledStartAt = (raceState.scheduledStartAt as string | undefined) ?? null;
+      const courseSnapshot = app.race?.courseSnapshot ?? null;
       
       const appPasses = passesByApp.get(app.id) || [];
       const activeTargetIndex = appPasses.length > 0 ? Math.max(...appPasses.map(p => p.checkpointIndex)) + 1 : 0;
+
+      const checkpoints =
+        (courseSnapshot?.checkpoints as any[]) ??
+        (app.race?.course?.checkpoints as any[]) ??
+        [];
+      const targets = checkpoints.filter((cp: any) => {
+        const k = cp.kind || cp.type;
+        return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
+      });
+      const hasFinished = targets.length > 0 && activeTargetIndex >= targets.length;
       
       let elapsedSeconds = null;
       if (startedAt) {
@@ -134,12 +165,21 @@ export class SailorService {
         }
       }
 
+      // Prefer finish-line elapsed when sailor already finished
+      if (hasFinished) {
+        const finishPass = appPasses.find((p) => p.checkpointIndex === targets.length - 1);
+        if (finishPass?.elapsedSeconds != null) {
+          elapsedSeconds = finishPass.elapsedSeconds;
+        }
+      }
+
       return {
         raceId: app.raceId,
         boatId: app.boatId,
         courseId: app.race?.courseId ?? null,
+        courseSnapshot,
         applicationId: app.id,
-        applicationStatus: app.status,
+        applicationStatus: hasFinished ? 'FINISHED' : app.status,
         sailNumber: app.sailNumber,
         boatName: app.boatName,
         raceTitle: app.race?.title ?? '',
@@ -150,7 +190,11 @@ export class SailorService {
         trackingConfig: resolveTrackingConfig(tracking),
         passedCheckpoints: appPasses,
         activeTargetIndex,
-        raceElapsedSeconds: Math.max(0, elapsedSeconds ?? 0) > 0 ? elapsedSeconds : null,
+        targetCount: targets.length,
+        hasFinished,
+        raceElapsedSeconds: Math.max(0, elapsedSeconds ?? 0) > 0 || elapsedSeconds === 0
+          ? elapsedSeconds
+          : null,
       };
     };
 
@@ -371,10 +415,9 @@ export class SailorService {
       return { leaderboard: [], raceId, total: 0 };
     }
 
-    // Get all applications for this race
     const applications = await this.applicationsRepo.find({
       where: { raceId },
-      relations: ['race'],
+      relations: ['race', 'race.course'],
       order: { finishPosition: 'ASC', createdAt: 'ASC' },
     });
 
@@ -397,7 +440,16 @@ export class SailorService {
     }
 
     const race = applications[0]?.race;
-    const totalCheckpoints = (race?.course as any)?.checkpoints?.length ?? 0;
+    const checkpoints =
+      (race?.courseSnapshot?.checkpoints as any[]) ??
+      (race?.course?.checkpoints as any[]) ??
+      [];
+    const targets = checkpoints.filter((cp: any) => {
+      const k = cp.kind || cp.type;
+      return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
+    });
+    const totalCheckpoints = targets.length;
+    const finishIndex = totalCheckpoints > 0 ? totalCheckpoints - 1 : -1;
 
     const leaderboard = applications.map((app, index) => {
       const appPasses = passesByApp.get(app.id) ?? [];
@@ -405,8 +457,17 @@ export class SailorService {
         ? appPasses.reduce((latest, p) => (p.checkpointIndex > latest.checkpointIndex ? p : latest), appPasses[0])
         : null;
       const totalElapsedSeconds = lastPass?.elapsedSeconds ?? null;
+      const maxCpIndex = lastPass?.checkpointIndex ?? -1;
       const checkpointsReached = appPasses.length;
-      const isFinished = totalCheckpoints > 0 && checkpointsReached >= totalCheckpoints;
+      const isFinished =
+        (finishIndex >= 0 && maxCpIndex === finishIndex) ||
+        app.finishPosition != null;
+
+      // Prefer persisted result statuses; map completed finishers for UI
+      let status: string = app.status;
+      if (isFinished && (status === ApplicationStatusEnum.APPROVED || status === ApplicationStatusEnum.CHECKED_IN)) {
+        status = 'FINISHED';
+      }
 
       // Assign display position: use stored finishPosition or fallback to array index
       const displayPosition = app.finishPosition ?? (index + 1);
@@ -424,7 +485,7 @@ export class SailorService {
         checkpointsReached,
         totalCheckpoints,
         isFinished,
-        status: app.status,
+        status,
         isMe: app.email === email,
       };
     });
