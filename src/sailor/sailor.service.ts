@@ -239,10 +239,18 @@ export class SailorService {
         const isRaceFinished = entry.race.status === RaceStatusEnum.FINISHED;
         const isPastEndDate = entry.race.endDate && new Date(entry.race.endDate) < now;
 
-        // Check if sailor passed all checkpoints
+        // Check if sailor passed all race targets (start/buoy/gate/finish)
         const entryPasses = passes.filter(p => p.applicationId === entry.application.id);
         const maxCp = entryPasses.length > 0 ? Math.max(...entryPasses.map(p => p.checkpointIndex)) : -1;
-        const totalCps = (entry.race.course?.checkpoints as any[])?.length || 0;
+        const checkpoints =
+          (entry.race.courseSnapshot?.checkpoints as any[]) ??
+          (entry.race.course?.checkpoints as any[]) ??
+          [];
+        const targets = checkpoints.filter((cp: any) => {
+          const k = cp.kind || cp.type;
+          return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
+        });
+        const totalCps = targets.length;
         const isSailorFinished = totalCps > 0 && maxCp >= totalCps - 1;
 
         return isRaceFinished || isPastEndDate || isSailorFinished;

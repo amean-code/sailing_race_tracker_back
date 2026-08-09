@@ -1048,7 +1048,8 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       where: { raceId: id },
     });
 
-    const finishIndex = (race.course?.checkpoints as any[])?.length ? (race.course?.checkpoints as any[]).length - 1 : -1;
+    const targets = this.getRaceTargets(race);
+    const finishIndex = targets.length > 0 ? targets.length - 1 : -1;
 
     const headers = ['Tekne Adı', 'Yelken No', 'Sınıf', 'Yarışmacı', 'Durum', 'Bitiş Zamanı', 'Geçen Süre'];
     
@@ -1102,6 +1103,9 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getPlaybackData(raceId: string) {
+    const race = await this.racesRepo.findOne({ where: { id: raceId } });
+    if (!race) throw new NotFoundException('Yarış bulunamadı');
+
     const trackPoints = await this.trackPointsRepo.find({
       where: { raceId },
       order: { recordedAt: 'ASC' },
@@ -1126,7 +1130,22 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       }
     });
 
-    return { trackPoints, applications, startTimes };
+    const raceState = (race.raceState ?? {}) as Record<string, unknown>;
+    const startedAtIso = typeof raceState.startedAt === 'string' ? raceState.startedAt : null;
+    const finishedAtIso = typeof raceState.finishedAt === 'string' ? raceState.finishedAt : null;
+    const durationSeconds =
+      typeof raceState.durationSeconds === 'number' ? raceState.durationSeconds : null;
+
+    return {
+      trackPoints,
+      applications,
+      startTimes,
+      raceTiming: {
+        startedAt: startedAtIso,
+        finishedAt: finishedAtIso,
+        durationSeconds,
+      },
+    };
   }
 
   async getLiveTrails(raceId: string) {
@@ -1134,7 +1153,10 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId, status: ApplicationStatusEnum.APPROVED },
+      where: {
+        raceId,
+        status: In([ApplicationStatusEnum.APPROVED, ApplicationStatusEnum.CHECKED_IN]),
+      },
       select: ['id', 'boatId'],
     });
 
