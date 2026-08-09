@@ -10,6 +10,60 @@ import { TrackPoint } from '../entities/track-point.entity';
 import { RacesService } from '../races/races.service';
 import * as turf from '@turf/turf';
 
+/** Match frontend raceLine.normalizeLineCrossing: starboard→up, port→down. */
+function normalizeLineCrossing(crossing?: string | null): 'up' | 'down' {
+  const value = String(crossing || '').toLowerCase();
+  if (value === 'down' || value === 'port') return 'down';
+  return 'up';
+}
+
+/** Geographic span bearing A→B (degrees). Same basis as frontend getLineBearing. */
+function getLineSpanBearing(coords: [[number, number], [number, number]]): number {
+  return turf.bearing(
+    turf.point([coords[0][1], coords[0][0]]),
+    turf.point([coords[1][1], coords[1][0]]),
+  );
+}
+
+/**
+ * Passage direction matching map arrows (getLinePassageBearing):
+ * up/starboard = span − 90°, down/port = span + 90°.
+ */
+function getRequiredPassageBearing(
+  coords: [[number, number], [number, number]],
+  crossing?: string | null,
+): number {
+  const span = getLineSpanBearing(coords);
+  const offset = normalizeLineCrossing(crossing) === 'up' ? -90 : 90;
+  return span + offset;
+}
+
+function bearingDiffDeg(a: number, b: number): number {
+  let diff = Math.abs(a - b) % 360;
+  if (diff > 180) diff = 360 - diff;
+  return diff;
+}
+
+/**
+ * After a geometric intersection, accept only if boat motion is within 90° of the
+ * designed passage arrows (rejects reverse/iskele-vs-sancak wrong way).
+ */
+function isLineCrossedInRequiredDirection(
+  coords: [[number, number], [number, number]],
+  crossing: string | undefined | null,
+  prevLng: number,
+  prevLat: number,
+  lng: number,
+  lat: number,
+): boolean {
+  const required = getRequiredPassageBearing(coords, crossing);
+  const boatBearing = turf.bearing(
+    turf.point([prevLng, prevLat]),
+    turf.point([lng, lat]),
+  );
+  return bearingDiffDeg(boatBearing, required) <= 90;
+}
+
 @Injectable()
 export class RaceEngineService {
   private readonly logger = new Logger(RaceEngineService.name);
@@ -161,16 +215,20 @@ export class RaceEngineService {
         ]);
         const intersects = turf.lineIntersect(boatPath, targetLine);
         if (intersects.features.length > 0) {
-          const gx = target.coords[1][1] - target.coords[0][1];
-          const gy = target.coords[1][0] - target.coords[0][0];
-          const bx = lng - previousState.lng;
-          const by = lat - previousState.lat;
-          const crossZ = gx * by - gy * bx;
-          
-          isCrossed = true;
-          
-          if (crossZ <= 0) {
-            this.logger.debug(`Boat ${boatId} crossed line ${activeTargetIndex} from reverse direction relative to line drawing.`);
+          const directionOk = isLineCrossedInRequiredDirection(
+            target.coords,
+            target.crossing,
+            previousState.lng,
+            previousState.lat,
+            lng,
+            lat,
+          );
+          if (directionOk) {
+            isCrossed = true;
+          } else {
+            this.logger.debug(
+              `Boat ${boatId} rejected checkpoint ${activeTargetIndex}: wrong crossing direction (required ${normalizeLineCrossing(target.crossing)})`,
+            );
           }
         }
       }
@@ -206,6 +264,7 @@ export class RaceEngineService {
         hasRoundedCorrectly = Math.abs(relativeBearing) > 90; // Şamandırayı geçmek (yanından ileri geçiş)
       }
 
+      // Award only when CPA side matches required rounding (wrong side never counts)
       if (state.minDistance < 0.3 && hasRoundedCorrectly) {
         isCrossed = true;
         state.minDistance = Infinity; // reset
@@ -214,10 +273,16 @@ export class RaceEngineService {
         if (rounding === 'port') sideCorrect = state.closestSide === 'port';
         if (rounding === 'starboard') sideCorrect = state.closestSide === 'starboard';
 
-        if (sideCorrect) {
+        if (sideCorrect && hasRoundedCorrectly) {
           isCrossed = true;
           state.minDistance = Infinity; // reset
-        } else if (distance > 0.2) {
+        } else if (!sideCorrect && distance > 0.2) {
+          this.logger.debug(
+            `Boat ${boatId} rejected buoy ${activeTargetIndex}: wrong rounding side (required ${rounding}, cpa ${state.closestSide})`,
+          );
+          state.minDistance = Infinity;
+        } else if (distance > 0.25) {
+          // Cleared without completing correct rounding — reset and wait for another attempt
           state.minDistance = Infinity;
         }
       }
