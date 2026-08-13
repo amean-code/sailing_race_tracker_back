@@ -171,15 +171,27 @@ export class RacesController {
   @Get(':id/export-results')
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
-  @ApiOperation({ summary: 'Yarış sonuçlarını dışa aktar (CSV)' })
+  @ApiOperation({ summary: 'Yarış sonuçlarını dışa aktar (CSV veya Excel/XLSX, tüm checkpoint geçişleriyle)' })
+  @ApiQuery({
+    name: 'format',
+    required: false,
+    enum: ['csv', 'xlsx'],
+    description: 'Dışa aktarma formatı (varsayılan: csv)',
+  })
   async exportRaceResults(
     @Param('id') id: string,
+    @Query('format') format: string | undefined,
     @CurrentUser() user: SessionUser,
     @Res() res: Response,
   ) {
-    const csv = await this.racesService.exportRaceResults(id, user);
-    res.setHeader('Content-Type', 'text/csv; charset=UTF-8');
-    res.setHeader('Content-Disposition', `attachment; filename="race-results-${id}.csv"`);
-    return res.send(csv);
+    const normalized = String(format || 'csv').toLowerCase() === 'xlsx' ? 'xlsx' : 'csv';
+    const file = await this.racesService.exportRaceResults(id, normalized, user);
+    const safeFilename = file.filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '') || `race-results.${normalized}`;
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+    );
+    return res.send(file.body);
   }
 }

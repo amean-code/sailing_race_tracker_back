@@ -86,7 +86,7 @@ export class SailorService {
         { email, status: ApplicationStatusEnum.DSQ },
       ],
       relations: ['race', 'race.course'],
-      order: { checkedInAt: 'DESC', createdAt: 'DESC' },
+      order: { createdAt: 'DESC' },
     });
 
     const liveAppStatuses = new Set([
@@ -117,6 +117,30 @@ export class SailorService {
     if (activeList.length === 0) {
       return { activeRace: null, activeRaces: [] };
     }
+
+    // Nearest race date first (scheduledStartAt when countdown is set, else startDate).
+    // Recently finished/cancelled races stay at the end.
+    const getRaceSortTime = (app: RaceApplication): number => {
+      const scheduled = app.race?.raceState?.scheduledStartAt;
+      if (typeof scheduled === 'string') {
+        const t = new Date(scheduled).getTime();
+        if (!Number.isNaN(t)) return t;
+      }
+      const start = app.race?.startDate;
+      return start ? new Date(start).getTime() : Number.MAX_SAFE_INTEGER;
+    };
+
+    const isClosedRace = (app: RaceApplication): boolean => {
+      const status = app.race?.status;
+      return status === RaceStatusEnum.FINISHED || status === RaceStatusEnum.CANCELLED;
+    };
+
+    activeList.sort((a, b) => {
+      const aClosed = isClosedRace(a);
+      const bClosed = isClosedRace(b);
+      if (aClosed !== bClosed) return aClosed ? 1 : -1;
+      return getRaceSortTime(a) - getRaceSortTime(b);
+    });
 
     const appIds = activeList.map(app => app.id);
     const passes = await this.checkpointPassRepo.find({
@@ -200,11 +224,14 @@ export class SailorService {
 
     const activeRaces = activeList.map(mapActiveRace);
 
-    // Prefer IN_PROGRESS race (has boatId) for the initial active race
-    const approved = activeRaces.find((r) => r.applicationStatus === ApplicationStatusEnum.APPROVED && r.boatId);
+    // Prefer a live race (in progress or countdown running), else nearest by date
+    const preferred =
+      activeRaces.find((r) => r.raceStatus === RaceStatusEnum.IN_PROGRESS) ||
+      activeRaces.find((r) => r.raceStatus === RaceStatusEnum.OPEN && r.scheduledStartAt) ||
+      activeRaces[0];
 
     return {
-      activeRace: approved || activeRaces[0],
+      activeRace: preferred ?? null,
       activeRaces,
     };
   }

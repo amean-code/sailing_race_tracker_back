@@ -30,6 +30,16 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../notifications/mail.service';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import ExcelJS from 'exceljs';
+
+export type RaceResultsExportFormat = 'csv' | 'xlsx';
+
+export interface RaceResultsExportFile {
+  format: RaceResultsExportFormat;
+  filename: string;
+  contentType: string;
+  body: Buffer;
+}
 
 @Injectable()
 export class RacesService implements OnModuleInit, OnModuleDestroy {
@@ -1025,7 +1035,34 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  async exportRaceResults(id: string, user?: SessionUser): Promise<string> {
+  private formatElapsedClock(elapsedSeconds: number | null | undefined): string {
+    if (elapsedSeconds == null) return '-';
+    const hours = Math.floor(elapsedSeconds / 3600);
+    const mins = Math.floor((elapsedSeconds % 3600) / 60);
+    const secs = elapsedSeconds % 60;
+    return `${hours > 0 ? String(hours).padStart(2, '0') + ':' : ''}${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+
+  private formatPassTime(passedAt: Date | null | undefined): string {
+    if (!passedAt) return '-';
+    return new Date(passedAt).toLocaleString('tr-TR');
+  }
+
+  private checkpointExportLabel(cp: any, index: number, finishIndex: number): string {
+    const id = String(cp?.id || `CP${index + 1}`);
+    const kind = String(cp?.kind || cp?.type || '').toLowerCase();
+    if (kind === 'start' || index === 0) return `Start (${id})`;
+    if (kind === 'finish' || index === finishIndex) return `Finish (${id})`;
+    if (kind === 'gate') return `Gate (${id})`;
+    if (kind === 'buoy') return `Buoy (${id})`;
+    return id;
+  }
+
+  private async buildRaceResultsTable(id: string): Promise<{
+    raceTitle: string;
+    headers: string[];
+    rows: string[][];
+  }> {
     const race = await this.racesRepo.findOne({ where: { id }, relations: ['course'] });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
 
@@ -1051,12 +1088,35 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     const targets = this.getRaceTargets(race);
     const finishIndex = targets.length > 0 ? targets.length - 1 : -1;
 
-    const headers = ['Tekne Adı', 'Yelken No', 'Sınıf', 'Yarışmacı', 'Durum', 'Bitiş Zamanı', 'Geçen Süre'];
-    
-    const rows = applications.map(app => {
-      const appPasses = allPasses.filter(p => p.applicationId === app.id);
-      const finishPass = appPasses.find(p => p.checkpointIndex === finishIndex);
-      
+    const checkpointHeaders = targets.flatMap((cp, index) => {
+      const label = this.checkpointExportLabel(cp, index, finishIndex);
+      return [`${label} Zaman`, `${label} Süre`, `${label} Sıra`];
+    });
+
+    const headers = [
+      'Sıra',
+      'Tekne Adı',
+      'Yelken No',
+      'Sınıf',
+      'Yarışmacı',
+      'Durum',
+      ...checkpointHeaders,
+      'Bitiş Zamanı',
+      'Toplam Süre',
+    ];
+
+    const passesByApp = new Map<string, CheckpointPass[]>();
+    for (const pass of allPasses) {
+      const list = passesByApp.get(pass.applicationId) ?? [];
+      list.push(pass);
+      passesByApp.set(pass.applicationId, list);
+    }
+
+    const rows = applications.map((app) => {
+      const appPasses = passesByApp.get(app.id) ?? [];
+      const passByIndex = new Map(appPasses.map((p) => [p.checkpointIndex, p]));
+      const finishPass = finishIndex >= 0 ? passByIndex.get(finishIndex) : undefined;
+
       const penaltyStatuses = [
         ApplicationStatusEnum.DNS,
         ApplicationStatusEnum.DNF,
@@ -1074,32 +1134,95 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       } else {
         statusLabel = String(app.status || '—');
       }
-      
-      let finishTime = '-';
-      let elapsedStr = '-';
-      
-      if (finishPass) {
-        finishTime = finishPass.passedAt ? new Date(finishPass.passedAt).toLocaleString('tr-TR') : '-';
-        if (finishPass.elapsedSeconds != null) {
-          const hours = Math.floor(finishPass.elapsedSeconds / 3600);
-          const mins = Math.floor((finishPass.elapsedSeconds % 3600) / 60);
-          const secs = finishPass.elapsedSeconds % 60;
-          elapsedStr = `${hours > 0 ? String(hours).padStart(2, '0') + ':' : ''}${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-        }
-      }
+
+      const checkpointCells = targets.flatMap((_cp, index) => {
+        const pass = passByIndex.get(index);
+        if (!pass) return ['-', '-', '-'];
+        return [
+          this.formatPassTime(pass.passedAt),
+          this.formatElapsedClock(pass.elapsedSeconds),
+          pass.rank != null ? String(pass.rank) : '-',
+        ];
+      });
 
       return [
-        `"${app.boatName || ''}"`,
-        `"${app.sailNumber || ''}"`,
-        `"${app.boat?.boatClass || ''}"`,
-        `"${app.name || ''}"`,
-        `"${statusLabel}"`,
-        `"${finishTime}"`,
-        `"${elapsedStr}"`
-      ].join(';');
+        app.finishPosition != null ? String(app.finishPosition) : '-',
+        app.boatName || '',
+        app.sailNumber || '',
+        app.boat?.boatClass || '',
+        app.name || '',
+        statusLabel,
+        ...checkpointCells,
+        finishPass ? this.formatPassTime(finishPass.passedAt) : '-',
+        finishPass ? this.formatElapsedClock(finishPass.elapsedSeconds) : '-',
+      ];
     });
 
-    return '\uFEFF' + [headers.join(';'), ...rows].join('\n');
+    return {
+      raceTitle: race.title || 'race',
+      headers,
+      rows,
+    };
+  }
+
+  private sanitizeExportFilename(title: string): string {
+    const ascii = String(title || 'race')
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9._-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
+    return ascii || 'race';
+  }
+
+  async exportRaceResults(
+    id: string,
+    format: RaceResultsExportFormat = 'csv',
+    _user?: SessionUser,
+  ): Promise<RaceResultsExportFile> {
+    const { raceTitle, headers, rows } = await this.buildRaceResultsTable(id);
+    const baseName = this.sanitizeExportFilename(raceTitle);
+
+    if (format === 'xlsx') {
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Sailing Race Tracker';
+      workbook.created = new Date();
+      const sheet = workbook.addWorksheet('Sonuçlar');
+      sheet.addRow(headers);
+      for (const row of rows) {
+        sheet.addRow(row);
+      }
+      sheet.getRow(1).font = { bold: true };
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      headers.forEach((_, colIndex) => {
+        const column = sheet.getColumn(colIndex + 1);
+        let max = String(headers[colIndex] || '').length;
+        for (const row of rows) {
+          max = Math.max(max, String(row[colIndex] ?? '').length);
+        }
+        column.width = Math.min(Math.max(max + 2, 10), 36);
+      });
+      const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+      return {
+        format: 'xlsx',
+        filename: `${baseName}_results.xlsx`,
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        body: buffer,
+      };
+    }
+
+    const escapeCsv = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
+    const csvLines = [
+      headers.map(escapeCsv).join(';'),
+      ...rows.map((row) => row.map(escapeCsv).join(';')),
+    ];
+    const csv = '\uFEFF' + csvLines.join('\n');
+    return {
+      format: 'csv',
+      filename: `${baseName}_results.csv`,
+      contentType: 'text/csv; charset=UTF-8',
+      body: Buffer.from(csv, 'utf8'),
+    };
   }
 
   async getPlaybackData(raceId: string) {

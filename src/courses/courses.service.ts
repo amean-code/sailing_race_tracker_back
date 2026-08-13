@@ -8,6 +8,25 @@ import { SessionUser } from '../common/decorators';
 
 import { Race } from '../entities/race.entity';
 
+/** Build a unique course name by appending (1), (2), … when needed. */
+export function nextUniqueCourseName(desiredName: string, takenNames: Iterable<string>): string {
+  const base = (desiredName || '').trim() || 'Parkur';
+  const taken = new Set(
+    Array.from(takenNames)
+      .map((n) => (n || '').trim().toLocaleLowerCase('tr-TR'))
+      .filter(Boolean),
+  );
+
+  const keyOf = (value: string) => value.trim().toLocaleLowerCase('tr-TR');
+  if (!taken.has(keyOf(base))) return base;
+
+  let n = 1;
+  while (taken.has(keyOf(`${base} (${n})`))) {
+    n += 1;
+  }
+  return `${base} (${n})`;
+}
+
 @Injectable()
 export class CoursesService {
   constructor(
@@ -29,6 +48,14 @@ export class CoursesService {
       createdAt: course.createdAt.toISOString(),
       updatedAt: course.updatedAt.toISOString(),
     };
+  }
+
+  private async resolveUniqueName(desiredName: string, excludeId?: string): Promise<string> {
+    const courses = await this.coursesRepo.find({ select: ['id', 'name'] });
+    const taken = courses
+      .filter((c) => !excludeId || c.id !== excludeId)
+      .map((c) => c.name);
+    return nextUniqueCourseName(desiredName, taken);
   }
 
   async findAll(user?: SessionUser) {
@@ -61,9 +88,10 @@ export class CoursesService {
 
   async create(dto: CreateCourseDto, user?: SessionUser) {
     let initialStatus = CourseStatusEnum.ACTIVE;
+    const uniqueName = await this.resolveUniqueName(dto.name);
 
     const course = this.coursesRepo.create({
-      name: dto.name,
+      name: uniqueName,
       checkpoints: dto.checkpoints as unknown as Record<string, unknown>[],
       createdById: user?.sub ?? null,
       status: initialStatus,
@@ -84,7 +112,7 @@ export class CoursesService {
       throw new ForbiddenException('Sadece kendi oluşturduğunuz parkuru düzenleyebilirsiniz.');
     }
 
-    course.name = dto.name;
+    course.name = await this.resolveUniqueName(dto.name, id);
     course.checkpoints = dto.checkpoints as unknown as Record<string, unknown>[];
     const saved = await this.coursesRepo.save(course);
     return this.findOne(saved.id, user);
