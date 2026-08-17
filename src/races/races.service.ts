@@ -1045,16 +1045,25 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
   private formatPassTime(passedAt: Date | null | undefined): string {
     if (!passedAt) return '-';
-    return new Date(passedAt).toLocaleString('tr-TR');
+    return new Intl.DateTimeFormat('tr-TR', {
+      timeZone: 'Europe/Istanbul',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).format(new Date(passedAt));
   }
 
   private checkpointExportLabel(cp: any, index: number, finishIndex: number): string {
     const id = String(cp?.id || `CP${index + 1}`);
     const kind = String(cp?.kind || cp?.type || '').toLowerCase();
     if (kind === 'start' || index === 0) return `Start (${id})`;
-    if (kind === 'finish' || index === finishIndex) return `Finish (${id})`;
-    if (kind === 'gate') return `Gate (${id})`;
-    if (kind === 'buoy') return `Buoy (${id})`;
+    if (kind === 'finish' || index === finishIndex) return `Bitiş (${id})`;
+    if (kind === 'gate') return `Kapı (${id})`;
+    if (kind === 'buoy') return `Şamandıra (${id})`;
     return id;
   }
 
@@ -1090,7 +1099,11 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     const checkpointHeaders = targets.flatMap((cp, index) => {
       const label = this.checkpointExportLabel(cp, index, finishIndex);
-      return [`${label} Zaman`, `${label} Süre`, `${label} Sıra`];
+      return [
+        `${label} - Geçiş Tarihi/Saati (Türkiye)`,
+        `${label} - Yarış Başlangıcından İtibaren Geçen Süre`,
+        `${label} - Geçiş Sırası`,
+      ];
     });
 
     const headers = [
@@ -1101,8 +1114,6 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       'Yarışmacı',
       'Durum',
       ...checkpointHeaders,
-      'Bitiş Zamanı',
-      'Toplam Süre',
     ];
 
     const passesByApp = new Map<string, CheckpointPass[]>();
@@ -1110,6 +1121,29 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       const list = passesByApp.get(pass.applicationId) ?? [];
       list.push(pass);
       passesByApp.set(pass.applicationId, list);
+    }
+
+    // Recompute each checkpoint's crossing order from the recorded crossing
+    // timestamp. Stored ranks reflect arrival order at the API, which can differ
+    // from actual crossing order when a device syncs late or was offline.
+    const crossingRankByAppAndCheckpoint = new Map<string, number>();
+    for (let checkpointIndex = 0; checkpointIndex < targets.length; checkpointIndex += 1) {
+      const passesAtCheckpoint = allPasses
+        .filter((pass) => pass.checkpointIndex === checkpointIndex)
+        .sort((a, b) => {
+          const timeDifference = a.passedAt.getTime() - b.passedAt.getTime();
+          if (timeDifference !== 0) return timeDifference;
+          const elapsedDifference = (a.elapsedSeconds ?? Infinity) - (b.elapsedSeconds ?? Infinity);
+          if (elapsedDifference !== 0) return elapsedDifference;
+          return a.applicationId.localeCompare(b.applicationId);
+        });
+
+      passesAtCheckpoint.forEach((pass, index) => {
+        crossingRankByAppAndCheckpoint.set(
+          `${pass.applicationId}:${checkpointIndex}`,
+          index + 1,
+        );
+      });
     }
 
     const rows = applications.map((app) => {
@@ -1141,7 +1175,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         return [
           this.formatPassTime(pass.passedAt),
           this.formatElapsedClock(pass.elapsedSeconds),
-          pass.rank != null ? String(pass.rank) : '-',
+          String(crossingRankByAppAndCheckpoint.get(`${app.id}:${index}`) ?? '-'),
         ];
       });
 
@@ -1153,8 +1187,6 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         app.name || '',
         statusLabel,
         ...checkpointCells,
-        finishPass ? this.formatPassTime(finishPass.passedAt) : '-',
-        finishPass ? this.formatElapsedClock(finishPass.elapsedSeconds) : '-',
       ];
     });
 
@@ -1192,8 +1224,20 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       for (const row of rows) {
         sheet.addRow(row);
       }
-      sheet.getRow(1).font = { bold: true };
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true };
+      headerRow.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      headerRow.height = 45;
+      headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE2E8F0' },
+      };
       sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.autoFilter = {
+        from: { row: 1, column: 1 },
+        to: { row: Math.max(rows.length + 1, 1), column: headers.length },
+      };
       headers.forEach((_, colIndex) => {
         const column = sheet.getColumn(colIndex + 1);
         let max = String(headers[colIndex] || '').length;
