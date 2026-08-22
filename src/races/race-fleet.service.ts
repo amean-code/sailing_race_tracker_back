@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -8,7 +9,8 @@ import { Repository } from 'typeorm';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Race } from '../entities/race.entity';
 import { Boat } from '../entities/boat.entity';
-import { ApplicationStatusEnum } from '../common/constants';
+import { ApplicationStatusEnum, UserRoleEnum } from '../common/constants';
+import { SessionUser } from '../common/decorators';
 import { TrackPointsService } from '../track-points/track-points.service';
 
 const FLEET_COLORS = [
@@ -37,7 +39,7 @@ export class RaceFleetService {
   private serializeApplication(app: RaceApplication) {
     return {
       id: app.id,
-      raceId: app.raceId,
+      legId: app.legId,
       name: app.name,
       email: app.email,
       phone: app.phone,
@@ -49,8 +51,8 @@ export class RaceFleetService {
       boatId: app.boatId,
       userId: app.userId,
       checkedInAt: app.checkedInAt?.toISOString() ?? null,
-      finishPosition: app.finishPosition,
-      fleetSize: app.fleetSize,
+      finishPosition: null as number | null,
+      fleetSize: null as number | null,
       createdAt: app.createdAt.toISOString(),
     };
   }
@@ -76,12 +78,37 @@ export class RaceFleetService {
     return FLEET_COLORS[index % FLEET_COLORS.length];
   }
 
-  async getCompetitors(raceId: string) {
-    const race = await this.racesRepo.findOne({ where: { id: raceId } });
+  private assertCanManageRace(race: Race, user: SessionUser) {
+    if (
+      user.role === UserRoleEnum.COMMITTEE &&
+      race.leg?.assignedCommitteeId !== user.sub
+    ) {
+      throw new ForbiddenException('Bu yarış size atanmamış.');
+    }
+    if (
+      user.role === UserRoleEnum.ADMIN &&
+      (race.leg?.createdById ?? race.createdById) !== user.sub
+    ) {
+      throw new ForbiddenException('Bu yarış size ait değil.');
+    }
+  }
+
+  private async loadRaceWithLeg(raceId: string) {
+    const race = await this.racesRepo.findOne({
+      where: { id: raceId },
+      relations: ['leg'],
+    });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
+    if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
+    return race;
+  }
+
+  async getCompetitors(raceId: string, user: SessionUser) {
+    const race = await this.loadRaceWithLeg(raceId);
+    this.assertCanManageRace(race, user);
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId },
+      where: { legId: race.legId! },
       relations: ['boat'],
       order: { createdAt: 'ASC' },
     });
@@ -102,12 +129,12 @@ export class RaceFleetService {
     };
   }
 
-  async checkIn(raceId: string, applicationId: string) {
-    const race = await this.racesRepo.findOne({ where: { id: raceId } });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
+  async checkIn(raceId: string, applicationId: string, user: SessionUser) {
+    const race = await this.loadRaceWithLeg(raceId);
+    this.assertCanManageRace(race, user);
 
     const app = await this.applicationsRepo.findOne({
-      where: { id: applicationId, raceId },
+      where: { id: applicationId, legId: race.legId! },
       relations: ['boat'],
     });
     if (!app) throw new NotFoundException('Başvuru bulunamadı');
@@ -124,7 +151,7 @@ export class RaceFleetService {
     }
 
     const existingCount = await this.applicationsRepo.count({
-      where: { raceId, status: ApplicationStatusEnum.APPROVED },
+      where: { legId: race.legId!, status: ApplicationStatusEnum.APPROVED },
     });
 
     let boat = app.boat;

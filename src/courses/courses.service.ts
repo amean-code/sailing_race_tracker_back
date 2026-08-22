@@ -87,6 +87,10 @@ export class CoursesService {
   }
 
   async create(dto: CreateCourseDto, user?: SessionUser) {
+    if (user?.role === UserRoleEnum.ADMIN) {
+      throw new ForbiddenException('Admin rolünün parkur oluşturma yetkisi yoktur.');
+    }
+
     let initialStatus = CourseStatusEnum.ACTIVE;
     const uniqueName = await this.resolveUniqueName(dto.name);
 

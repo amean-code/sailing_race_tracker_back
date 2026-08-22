@@ -22,4 +22,14 @@ export class RecordCheckpointPassDto {
   @IsOptional()
   @IsNumber()
   elapsedSeconds?: number;
+
+  @ApiProperty({ description: 'Latitude where the boat crossed the line', required: false })
+  @IsOptional()
+  @IsNumber()
+  crossLat?: number;
+
+  @ApiProperty({ description: 'Longitude where the boat crossed the line', required: false })
+  @IsOptional()
+  @IsNumber()
+  crossLng?: number;
 }

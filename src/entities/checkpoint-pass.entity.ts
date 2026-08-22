@@ -44,6 +44,13 @@ export class CheckpointPass {
   @Column({ name: 'rank', type: 'int', nullable: true })
   rank!: number | null;
 
+  /** Exact lat/lng where the boat crossed a line checkpoint (start/gate/finish) */
+  @Column({ name: 'cross_lat', type: 'double precision', nullable: true })
+  crossLat!: number | null;
+
+  @Column({ name: 'cross_lng', type: 'double precision', nullable: true })
+  crossLng!: number | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

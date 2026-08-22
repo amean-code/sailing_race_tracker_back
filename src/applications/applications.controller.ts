@@ -33,13 +33,15 @@ export class ApplicationsController {
 
   @Get()
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
-  @ApiQuery({ name: 'raceId', required: false })
+  @ApiQuery({ name: 'legId', required: false })
+  @ApiQuery({ name: 'raceId', required: false, description: 'Resolves to legId via race.legId' })
   @ApiOperation({ summary: 'Tüm yarış başvuruları' })
   async findAll(
     @CurrentUser() user: SessionUser,
+    @Query('legId') legId?: string,
     @Query('raceId') raceId?: string,
   ) {
-    const applications = await this.applicationsService.findAll(user, raceId);
+    const applications = await this.applicationsService.findAll(user, { legId, raceId });
     return { applications };
   }
 

@@ -64,6 +64,25 @@ function isLineCrossedInRequiredDirection(
   return bearingDiffDeg(boatBearing, required) <= 90;
 }
 
+/** Exact geographic point where the boat track intersects the line. */
+function getLineCrossingPoint(
+  coords: [[number, number], [number, number]],
+  prevLng: number,
+  prevLat: number,
+  lng: number,
+  lat: number,
+): { lat: number; lng: number } | null {
+  const boatPath = turf.lineString([[prevLng, prevLat], [lng, lat]]);
+  const targetLine = turf.lineString([
+    [coords[0][1], coords[0][0]],
+    [coords[1][1], coords[1][0]],
+  ]);
+  const intersects = turf.lineIntersect(boatPath, targetLine);
+  if (intersects.features.length === 0) return null;
+  const [crossLng, crossLat] = intersects.features[0].geometry.coordinates;
+  return { lat: crossLat, lng: crossLng };
+}
+
 @Injectable()
 export class RaceEngineService {
   private readonly logger = new Logger(RaceEngineService.name);
@@ -147,18 +166,17 @@ export class RaceEngineService {
       closestSide: previousState?.closestSide,
     });
 
-    // 1. Get Active Race Application
+    // 1. Get Race & Course (applications are per-leg)
+    const race = await this.racesRepo.findOne({ where: { id: raceId }, relations: ['course'] });
+    if (!race || !race.legId || race.status !== 'IN_PROGRESS') return;
+
     const app = await this.applicationsRepo.findOne({
       where: [
-        { raceId, boatId, status: 'APPROVED' as any },
-        { raceId, boatId, status: 'CHECKED_IN' as any },
+        { legId: race.legId, boatId, status: 'APPROVED' as any },
+        { legId: race.legId, boatId, status: 'CHECKED_IN' as any },
       ],
     });
     if (!app) return;
-
-    // 2. Get Race & Course
-    const race = await this.racesRepo.findOne({ where: { id: raceId }, relations: ['course'] });
-    if (!race || race.status !== 'IN_PROGRESS') return;
 
     let checkpoints: any[] = [];
     if (race.courseSnapshot && Array.isArray(race.courseSnapshot.checkpoints)) {
@@ -202,6 +220,7 @@ export class RaceEngineService {
 
     const kind = target.kind || target.type;
     const isLine = kind === 'start' || kind === 'finish' || kind === 'gate';
+    let crossingPoint: { lat: number; lng: number } | null = null;
 
     if (isLine) {
       if (target.coords && target.coords.length === 2) {
@@ -215,6 +234,13 @@ export class RaceEngineService {
         ]);
         const intersects = turf.lineIntersect(boatPath, targetLine);
         if (intersects.features.length > 0) {
+          crossingPoint = getLineCrossingPoint(
+            target.coords,
+            previousState.lng,
+            previousState.lat,
+            lng,
+            lat,
+          );
           const directionOk = isLineCrossedInRequiredDirection(
             target.coords,
             target.crossing,
@@ -226,6 +252,7 @@ export class RaceEngineService {
           if (directionOk) {
             isCrossed = true;
           } else {
+            crossingPoint = null;
             this.logger.debug(
               `Boat ${boatId} rejected checkpoint ${activeTargetIndex}: wrong crossing direction (required ${normalizeLineCrossing(target.crossing)})`,
             );
@@ -316,6 +343,8 @@ export class RaceEngineService {
         checkpointId,
         passedAt: recordedAt,
         elapsedSeconds: elapsedSeconds !== null ? elapsedSeconds : undefined,
+        crossLat: crossingPoint?.lat,
+        crossLng: crossingPoint?.lng,
       });
 
       // 7. Emit events
@@ -327,6 +356,8 @@ export class RaceEngineService {
         checkpointId,
         passedAt: recordedAt,
         elapsedSeconds,
+        crossLat: crossingPoint?.lat ?? null,
+        crossLng: crossingPoint?.lng ?? null,
       });
 
       // Trigger Leaderboard Update Event

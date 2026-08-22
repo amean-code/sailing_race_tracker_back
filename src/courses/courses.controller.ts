@@ -37,7 +37,7 @@ export class CoursesController {
   }
 
   @Post()
-  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @Roles('COMMITTEE', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yeni parkur oluştur' })
   async create(@Body() dto: CreateCourseDto, @CurrentUser() user: SessionUser) {
     const course = await this.coursesService.create(dto, user);

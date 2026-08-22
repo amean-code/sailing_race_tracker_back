@@ -5,15 +5,16 @@ import {
   IsDateString,
   IsEnum,
   IsInt,
-  IsObject,
   IsOptional,
   IsString,
   Max,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { RaceStatusEnum, TrophyStatusEnum } from '../../common/constants';
+import { CreateLegRaceDto } from '../../legs/dto/leg.dto';
 
 export class CreateTrophyLegDto {
   @ApiProperty()
@@ -36,17 +37,20 @@ export class CreateTrophyLegDto {
   @IsString()
   venue?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsDateString()
-  startDate!: string;
+  startDate?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsDateString()
-  endDate!: string;
+  endDate?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsDateString()
-  registrationDeadline!: string;
+  registrationDeadline?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -78,26 +82,17 @@ export class CreateTrophyLegDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsString()
-  courseId?: string | null;
-
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  courseIds?: string[];
-
-  @ApiPropertyOptional()
-  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   legOrder?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ type: [CreateLegRaceDto] })
   @IsOptional()
-  @IsObject()
-  raceState?: Record<string, unknown>;
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateLegRaceDto)
+  races?: CreateLegRaceDto[];
 }
 
 export class CreateTrophyDto {
@@ -153,6 +148,14 @@ export class CreateTrophyDto {
   @Min(1)
   @Max(50)
   plannedLegCount?: number;
+
+  @ApiPropertyOptional({ description: 'Oluşturulabilecek maksimum tekne grubu sayısı' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  maxGroupCount?: number;
 
   @ApiPropertyOptional({ type: [CreateTrophyLegDto] })
   @IsOptional()
@@ -215,4 +218,60 @@ export class UpdateTrophyDto {
   @Min(1)
   @Max(50)
   plannedLegCount?: number | null;
+
+  @ApiPropertyOptional({ description: 'Oluşturulabilecek maksimum tekne grubu sayısı' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  maxGroupCount?: number | null;
+}
+
+export class CreateTrophyGroupDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  name!: string;
+
+  @ApiPropertyOptional({ description: 'null/omit = limitsiz' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  capacity?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
+}
+
+export class UpdateTrophyGroupDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  name?: string;
+
+  @ApiPropertyOptional({ description: 'null = limitsiz' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  capacity?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
 }

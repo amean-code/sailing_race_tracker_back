@@ -24,27 +24,30 @@ export class CreateRaceDto {
   @IsString()
   description?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  location!: string;
+  location?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   venue?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsDateString()
-  startDate!: string;
+  startDate?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsDateString()
-  endDate!: string;
+  endDate?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsDateString()
-  registrationDeadline!: string;
+  registrationDeadline?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

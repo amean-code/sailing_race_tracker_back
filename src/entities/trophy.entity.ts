@@ -9,7 +9,8 @@ import {
 } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { TrophyStatusEnum } from '../common/constants';
-import { Race } from './race.entity';
+import { Leg } from './leg.entity';
+import { TrophyGroup } from './trophy-group.entity';
 
 @Entity('trophies')
 export class Trophy {
@@ -51,10 +52,14 @@ export class Trophy {
   @Column({ name: 'planned_leg_count', type: 'int', nullable: true })
   plannedLegCount!: number | null;
 
+  /** Max number of boat groups that can be created for this trophy */
+  @Column({ name: 'max_group_count', type: 'int', nullable: true })
+  maxGroupCount!: number | null;
+
   @Column({ name: 'created_by_id', type: 'text', nullable: true })
   createdById!: string | null;
 
-  /** @deprecated Hakem ataması ayak (Race) seviyesinde yapılır */
+  /** @deprecated Hakem ataması ayak (Leg) seviyesinde yapılır */
   @Column({ name: 'assigned_committee_id', type: 'text', nullable: true })
   assignedCommitteeId!: string | null;
 
@@ -64,8 +69,11 @@ export class Trophy {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt!: Date;
 
-  @OneToMany(() => Race, (race) => race.trophy)
-  legs!: Race[];
+  @OneToMany(() => Leg, (leg) => leg.trophy)
+  legs!: Leg[];
+
+  @OneToMany(() => TrophyGroup, (group) => group.trophy)
+  groups!: TrophyGroup[];
 
   @BeforeInsert()
   generateId() {

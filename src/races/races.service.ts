@@ -11,12 +11,21 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Race } from '../entities/race.entity';
+import { Leg } from '../entities/leg.entity';
 import { Course } from '../entities/course.entity';
 import { User } from '../entities/user.entity';
 import { RaceApplication } from '../entities/race-application.entity';
+import { RaceResult } from '../entities/race-result.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
 import { TrackPoint } from '../entities/track-point.entity';
-import { RaceStatusEnum, NotificationEventEnum, CourseStatusEnum, UserRoleEnum, ApplicationStatusEnum, RaceTypeEnum } from '../common/constants';
+import {
+  RaceStatusEnum,
+  NotificationEventEnum,
+  CourseStatusEnum,
+  UserRoleEnum,
+  ApplicationStatusEnum,
+  RaceResultStatusEnum,
+} from '../common/constants';
 import { SessionUser } from '../common/decorators';
 import { serializeRace, RaceLike } from '../common/utils/serialize-race';
 import {
@@ -50,8 +59,12 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @InjectRepository(Race)
     private readonly racesRepo: Repository<Race>,
+    @InjectRepository(Leg)
+    private readonly legsRepo: Repository<Leg>,
     @InjectRepository(RaceApplication)
     private readonly applicationsRepo: Repository<RaceApplication>,
+    @InjectRepository(RaceResult)
+    private readonly resultsRepo: Repository<RaceResult>,
     @InjectRepository(CheckpointPass)
     private readonly checkpointPassRepo: Repository<CheckpointPass>,
     @InjectRepository(Course)
@@ -167,16 +180,63 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async withCount(race: Race) {
-    const applicationCount = await this.applicationsRepo.count({
-      where: { raceId: race.id },
+    return serializeRace({
+      ...race,
+      leg: race.leg
+        ? {
+            id: race.leg.id,
+            title: race.leg.title,
+            kind: race.leg.kind,
+            trophyId: race.leg.trophyId,
+          }
+        : null,
+    } as RaceLike);
+  }
+
+  private async loadRace(id: string) {
+    const race = await this.racesRepo.findOne({
+      where: { id },
+      relations: ['course', 'leg'],
     });
-    return serializeRace({ ...race, applicationCount } as RaceLike);
+    if (!race) throw new NotFoundException('Yarış bulunamadı');
+    return race;
   }
 
   private assertCommitteeAssigned(race: Race, user: SessionUser) {
     if (user.role !== UserRoleEnum.COMMITTEE) return;
-    if (race.assignedCommitteeId !== user.sub) {
+    const assignedId = race.leg?.assignedCommitteeId;
+    if (assignedId !== user.sub) {
       throw new ForbiddenException('Bu yarış size atanmamış.');
+    }
+  }
+
+  private assertAdminOwnsRace(race: Race, user: SessionUser) {
+    if (user.role !== UserRoleEnum.ADMIN) return;
+    const ownerId = race.leg?.createdById ?? race.createdById;
+    if (ownerId !== user.sub) {
+      throw new ForbiddenException('Bu yarış size ait değil.');
+    }
+  }
+
+  private assertCanManageRace(race: Race, user: SessionUser) {
+    this.assertCommitteeAssigned(race, user);
+    this.assertAdminOwnsRace(race, user);
+  }
+
+  private static readonly COMMITTEE_RACE_METADATA_FIELDS = [
+    'title',
+    'description',
+    'startDate',
+    'endDate',
+  ] as const;
+
+  private assertCommitteeNotEditingMetadata(dto: UpdateRaceDto, user: SessionUser) {
+    if (user.role !== UserRoleEnum.COMMITTEE) return;
+    const hasMetadataChange = RacesService.COMMITTEE_RACE_METADATA_FIELDS.some(
+      (key) => dto[key] !== undefined,
+    );
+    if (hasMetadataChange) {
+      throw new ForbiddenException('Hakem yarış bilgilerini düzenleyemez.');
     }
   }
 
@@ -188,23 +248,42 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     return referee.id;
   }
 
+  private async getLegApplications(legId: string) {
+    return this.applicationsRepo.find({
+      where: {
+        legId,
+        status: In([
+          ApplicationStatusEnum.APPROVED,
+          ApplicationStatusEnum.CHECKED_IN,
+          ApplicationStatusEnum.DNS,
+          ApplicationStatusEnum.DNF,
+          ApplicationStatusEnum.DSQ,
+        ]),
+      },
+      relations: ['boat'],
+      order: { createdAt: 'ASC' },
+    });
+  }
+
   async findAllManage(user?: SessionUser, status?: string) {
-    const whereCondition: any = {};
+    const qb = this.racesRepo
+      .createQueryBuilder('race')
+      .leftJoinAndSelect('race.course', 'course')
+      .leftJoinAndSelect('race.leg', 'leg')
+      .orderBy('race.startDate', 'ASC');
 
     if (user?.role === UserRoleEnum.COMMITTEE) {
-      whereCondition.assignedCommitteeId = user.sub;
+      qb.andWhere('leg.assignedCommitteeId = :userId', { userId: user.sub });
+    } else if (user?.role === UserRoleEnum.ADMIN) {
+      qb.andWhere('leg.createdById = :userId', { userId: user.sub });
     }
 
     if (status) {
       const statuses = status.split(',');
-      whereCondition.status = In(statuses);
+      qb.andWhere('race.status IN (:...statuses)', { statuses });
     }
 
-    const races = await this.racesRepo.find({
-      where: whereCondition,
-      relations: ['course', 'trophy'],
-      order: { startDate: 'ASC' },
-    });
+    const races = await qb.getMany();
     return Promise.all(races.map((r) => this.withCount(r)));
   }
 
@@ -215,67 +294,22 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         { status: RaceStatusEnum.IN_PROGRESS },
         { status: RaceStatusEnum.FINISHED },
       ],
-      relations: ['course', 'trophy'],
+      relations: ['course', 'leg'],
       order: { startDate: 'ASC' },
     });
     return Promise.all(races.map((r) => this.withCount(r)));
   }
 
   async findOne(id: string, user?: SessionUser) {
-    const race = await this.racesRepo.findOne({
-      where: { id },
-      relations: ['course', 'trophy'],
-    });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
-    if (user) this.assertCommitteeAssigned(race, user);
+    const race = await this.loadRace(id);
+    if (user) this.assertCanManageRace(race, user);
     return this.withCount(race);
   }
 
-  async create(dto: CreateRaceDto, createdById: string) {
-    if (dto.type === RaceTypeEnum.TROFE_LEG) {
-      throw new BadRequestException(
-        'Trofe ayağı oluşturmak için POST /trophies/:id/legs kullanın.',
-      );
-    }
-
-    const assignedCommitteeId = await this.resolveCommitteeId(dto.assignedCommitteeId);
-
-    const race = this.racesRepo.create({
-      title: dto.title,
-      description: dto.description ?? null,
-      location: dto.location,
-      venue: dto.venue ?? null,
-      startDate: new Date(dto.startDate),
-      endDate: new Date(dto.endDate),
-      registrationDeadline: new Date(dto.registrationDeadline),
-      boatClass: dto.boatClass ?? null,
-      capacity: dto.capacity ?? 30,
-      status: dto.status ?? RaceStatusEnum.OPEN,
-      organizer: dto.organizer ?? null,
-      courseId: null,
-      courseIds: [],
-      raceState: dto.raceState ?? {},
-      createdById,
-      assignedCommitteeId,
-      type: RaceTypeEnum.REGATA,
-      trophyId: null,
-      legOrder: null,
-    });
-
-    const saved = await this.racesRepo.save(race);
-    const result = await this.findOne(saved.id);
-    this.notificationsService.dispatchAsync(NotificationEventEnum.RACE_CREATED, {
-      raceId: saved.id,
-      raceTitle: saved.title,
-      raceLocation: saved.location,
-      raceStatus: saved.status,
-    });
-    this.eventEmitter.emit('race.created', {
-      raceId: saved.id,
-      userId: createdById,
-      description: `Yarış oluşturuldu: ${saved.title}`,
-    });
-    return result;
+  async create(_dto: CreateRaceDto, _createdById: string) {
+    throw new BadRequestException(
+      'Yarış oluşturmak için POST /legs (regata/tek) veya POST /trophies/:id/legs + POST /legs/:id/races kullanın.',
+    );
   }
 
   private applyStatusChange(race: Race, nextStatus: RaceStatusEnum): void {
@@ -319,13 +353,12 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async handleRaceAction(id: string, dto: RaceActionDto, user: SessionUser) {
-    const race = await this.racesRepo.findOne({ where: { id } });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
+    const race = await this.loadRace(id);
 
     if (!['COMMITTEE', 'ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
       throw new ForbiddenException('Bu işlem için yetkiniz yok');
     }
-    this.assertCommitteeAssigned(race, user);
+    this.assertCanManageRace(race, user);
 
     const { action, reason } = dto;
 
@@ -372,55 +405,44 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
       await this.racesRepo.save(race);
 
-      // Clear all checkpoint passes for this race
       await this.checkpointPassRepo.delete({ raceId: race.id });
-
-      // Clear all track points for this race
       await this.trackPointsRepo.delete({ raceId: race.id });
+      await this.resultsRepo.delete({ raceId: race.id });
     } else {
       throw new BadRequestException('Geçersiz işlem');
     }
 
-    const saved = await this.racesRepo.findOne({ where: { id }, relations: ['course'] });
-    if (saved) {
-      this.emitRaceUpdated(saved);
-      if (action === 'finish') {
-        this.eventEmitter.emit('race.finished', {
-          raceId: saved.id,
-          userId: user.sub,
-        });
-      } else if (action === 'abandon') {
-        this.eventEmitter.emit('race.cancelled', {
-          raceId: saved.id,
-          userId: user.sub,
-        });
-      }
+    const saved = await this.loadRace(id);
+    this.emitRaceUpdated(saved);
+    if (action === 'finish') {
+      this.eventEmitter.emit('race.finished', {
+        raceId: saved.id,
+        userId: user.sub,
+      });
+    } else if (action === 'abandon') {
+      this.eventEmitter.emit('race.cancelled', {
+        raceId: saved.id,
+        userId: user.sub,
+      });
     }
     return this.findOne(id);
   }
 
   async update(id: string, dto: UpdateRaceDto, user?: SessionUser) {
-    const race = await this.racesRepo.findOne({ where: { id } });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
+    const race = await this.loadRace(id);
 
     if (!user || !['COMMITTEE', 'ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
       throw new ForbiddenException('Bu işlem için yetkiniz yok');
     }
-    this.assertCommitteeAssigned(race, user);
+    this.assertCanManageRace(race, user);
+    this.assertCommitteeNotEditingMetadata(dto, user);
 
     const previousStatus = race.status;
 
     if (dto.title !== undefined) race.title = dto.title;
     if (dto.description !== undefined) race.description = dto.description ?? null;
-    if (dto.location !== undefined) race.location = dto.location;
-    if (dto.venue !== undefined) race.venue = dto.venue ?? null;
-    if (dto.startDate !== undefined) race.startDate = new Date(dto.startDate);
-    if (dto.endDate !== undefined) race.endDate = new Date(dto.endDate);
-    if (dto.registrationDeadline !== undefined) {
-      race.registrationDeadline = new Date(dto.registrationDeadline);
-    }
-    if (dto.boatClass !== undefined) race.boatClass = dto.boatClass ?? null;
-    if (dto.capacity !== undefined) race.capacity = dto.capacity;
+    if (dto.startDate !== undefined) race.startDate = dto.startDate ? new Date(dto.startDate) : null;
+    if (dto.endDate !== undefined) race.endDate = dto.endDate ? new Date(dto.endDate) : null;
     if (dto.status !== undefined) {
       this.applyStatusChange(race, dto.status);
       if (dto.status === RaceStatusEnum.FINISHED) {
@@ -434,14 +456,6 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         if (race.title.startsWith('TAMAMLANAMAYAN ')) {
           race.title = race.title.replace('TAMAMLANAMAYAN ', '');
         }
-      }
-    }
-    if (dto.organizer !== undefined) race.organizer = dto.organizer ?? null;
-    if (dto.assignedCommitteeId !== undefined) {
-      if (user && ['ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
-        race.assignedCommitteeId = dto.assignedCommitteeId
-          ? await this.resolveCommitteeId(dto.assignedCommitteeId)
-          : null;
       }
     }
     if (dto.courseId !== undefined) {
@@ -471,7 +485,6 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Clear any pending schedule when the race actually starts
     if (
       dto.status === RaceStatusEnum.IN_PROGRESS &&
       previousStatus !== RaceStatusEnum.IN_PROGRESS
@@ -489,7 +502,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     const ctx = {
       raceTitle: saved.title,
-      raceLocation: saved.location,
+      raceLocation: saved.leg?.location ?? '',
       raceStatus: saved.status,
     };
 
@@ -526,16 +539,16 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async remove(id: string, user?: SessionUser) {
-    const race = await this.racesRepo.findOne({ where: { id } });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
+    const race = await this.loadRace(id);
 
     if (!user || !['ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
       throw new ForbiddenException('Yarış silme yetkisi yalnızca yöneticilerdedir.');
     }
+    this.assertAdminOwnsRace(race, user);
 
     const ctx = {
       raceTitle: race.title,
-      raceLocation: race.location,
+      raceLocation: race.leg?.location ?? '',
     };
 
     const result = await this.racesRepo.delete({ id });
@@ -545,99 +558,53 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     return { ok: true };
   }
 
-  async cloneRace(id: string, createdById: string) {
-    const race = await this.racesRepo.findOne({ where: { id } });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
+  async cloneRace(id: string, createdById: string, user?: SessionUser) {
+    const race = await this.loadRace(id);
+    if (user) this.assertAdminOwnsRace(race, user);
+    if (!race.legId) {
+      throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
+    }
+
+    const existing = await this.racesRepo.find({
+      where: { legId: race.legId },
+      select: ['raceOrder'],
+    });
+    const maxOrder = existing.reduce((max, r) => Math.max(max, r.raceOrder ?? 0), 0);
 
     const clone = this.racesRepo.create({
       title: `[KOPYA] ${race.title}`,
       description: race.description,
-      location: race.location,
-      venue: race.venue,
       startDate: race.startDate,
       endDate: race.endDate,
-      registrationDeadline: race.registrationDeadline,
-      boatClass: race.boatClass,
-      capacity: race.capacity,
       status: RaceStatusEnum.DRAFT,
-      organizer: race.organizer,
       courseId: race.courseId,
       courseIds: race.courseIds ?? [],
       raceState: {},
       createdById,
-      type: race.type ?? RaceTypeEnum.REGATA,
-      trophyId: race.trophyId ?? null,
-      legOrder: race.legOrder ?? null,
+      legId: race.legId,
+      raceOrder: maxOrder + 1,
     });
     const saved = await this.racesRepo.save(clone);
     return this.findOne(saved.id);
   }
 
   async submitApplication(raceId: string, dto: RaceApplicationDto, user?: SessionUser) {
-    const race = await this.racesRepo.findOne({ where: { id: raceId } });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
-
-    const enriched = await this.withCount(race);
-    if (!enriched.registrationOpen) {
-      throw new BadRequestException('Bu yarış için kayıt kapatılmış');
+    const race = await this.loadRace(raceId);
+    if (!race.legId) {
+      throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
     }
-
-    const email = dto.email.toLowerCase();
-    const existing = await this.applicationsRepo.findOne({
-      where: { raceId, email },
-    });
-    if (existing) {
-      throw new ConflictException('Bu e-posta ile zaten başvurdunuz');
-    }
-
-    const application = this.applicationsRepo.create({
-      raceId,
-      name: dto.name,
-      email,
-      phone: dto.phone ?? null,
-      boatName: dto.boatName,
-      sailNumber: dto.sailNumber,
-      club: dto.club ?? null,
-      notes: dto.notes ?? null,
-      crewMembers: dto.crewMembers ?? null,
-      userId: user?.sub ?? null,
-    });
-    const saved = await this.applicationsRepo.save(application);
-
-    this.notificationsService.dispatchAsync(
-      NotificationEventEnum.APPLICATION_SUBMITTED,
-      {
-        raceTitle: race.title,
-        raceLocation: race.location,
-        applicantName: saved.name,
-        boatName: saved.boatName,
-        sailNumber: saved.sailNumber,
-      },
-      {
-        email: saved.email,
-        phone: saved.phone,
-        name: saved.name,
-      },
+    throw new BadRequestException(
+      `Başvurular ayak üzerinden alınır. POST /legs/${race.legId}/applications kullanın.`,
     );
-
-    return {
-      id: saved.id,
-      raceId: saved.raceId,
-      name: saved.name,
-      email: saved.email,
-      createdAt: saved.createdAt.toISOString(),
-    };
   }
 
   async recordCheckpointPass(raceId: string, dto: RecordCheckpointPassDto, user?: SessionUser) {
-    const race = await this.racesRepo.findOne({
-      where: { id: raceId },
-      relations: ['course'],
-    });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
+    const race = await this.loadRace(raceId);
+
+    if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
 
     const app = await this.applicationsRepo.findOne({
-      where: { id: dto.applicationId, raceId },
+      where: { id: dto.applicationId, legId: race.legId },
     });
     if (!app) throw new NotFoundException('Başvuru bulunamadı');
 
@@ -656,6 +623,8 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       existing.passedAt = new Date(dto.passedAt);
       existing.elapsedSeconds = dto.elapsedSeconds ?? null;
       existing.rank = rank;
+      if (dto.crossLat != null) existing.crossLat = dto.crossLat;
+      if (dto.crossLng != null) existing.crossLng = dto.crossLng;
       await this.checkpointPassRepo.save(existing);
       return { ok: true, id: existing.id, rank };
     }
@@ -668,6 +637,8 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       passedAt: new Date(dto.passedAt),
       elapsedSeconds: dto.elapsedSeconds ?? null,
       rank,
+      crossLat: dto.crossLat ?? null,
+      crossLng: dto.crossLng ?? null,
     });
     const saved = await this.checkpointPassRepo.save(pass);
     return { ok: true, id: saved.id, rank };
@@ -726,23 +697,12 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getStandings(raceId: string, user?: SessionUser) {
-    const race = await this.racesRepo.findOne({ where: { id: raceId }, relations: ['course'] });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
+    const race = await this.loadRace(raceId);
+    if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
 
-    const applications = await this.applicationsRepo.find({
-      where: {
-        raceId,
-        status: In([
-          ApplicationStatusEnum.APPROVED,
-          ApplicationStatusEnum.CHECKED_IN,
-          ApplicationStatusEnum.DNS,
-          ApplicationStatusEnum.DNF,
-          ApplicationStatusEnum.DSQ,
-        ]),
-      },
-      relations: ['boat'],
-      order: { createdAt: 'ASC' },
-    });
+    const applications = await this.getLegApplications(race.legId);
+    const results = await this.resultsRepo.find({ where: { raceId } });
+    const resultByApp = new Map(results.map((r) => [r.applicationId, r]));
 
     const passes = await this.checkpointPassRepo.find({
       where: { raceId },
@@ -773,6 +733,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       const best = bestPassByApp.get(app.id) ?? null;
       const appPasses = (allPassesByApp.get(app.id) ?? [])
         .sort((a, b) => a.checkpointIndex - b.checkpointIndex);
+      const raceResult = resultByApp.get(app.id);
 
       const elapsedNow = raceStartedAt
         ? Math.floor((Date.now() - new Date(raceStartedAt).getTime()) / 1000)
@@ -780,8 +741,12 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
       const maxCpIndex = best?.checkpointIndex ?? -1;
       const isFinished = finishIndex >= 0 && maxCpIndex === finishIndex;
+      const storedStatus = String(raceResult?.status ?? app.status);
       const resultStatus = this.deriveResultStatus({
-        storedStatus: String(app.status),
+        storedStatus:
+          storedStatus === RaceResultStatusEnum.FINISHED
+            ? ApplicationStatusEnum.APPROVED
+            : storedStatus,
         maxCpIndex,
         finishIndex,
         raceOver,
@@ -798,16 +763,23 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         elapsedSeconds: best?.elapsedSeconds ?? null,
         rank: best?.rank ?? null,
         elapsedNow,
-        passes: appPasses.map((p) => ({
-          checkpointIndex: p.checkpointIndex,
-          checkpointId: p.checkpointId,
-          passedAt: p.passedAt.toISOString(),
-          elapsedSeconds: p.elapsedSeconds,
-          rank: p.rank,
-        })),
+        passes: appPasses.map((p) => {
+          const target = targets[p.checkpointIndex];
+          const checkpointKind = target?.kind || target?.type || null;
+          return {
+            checkpointIndex: p.checkpointIndex,
+            checkpointId: p.checkpointId,
+            checkpointKind,
+            passedAt: p.passedAt.toISOString(),
+            elapsedSeconds: p.elapsedSeconds,
+            rank: p.rank,
+            crossLat: p.crossLat ?? null,
+            crossLng: p.crossLng ?? null,
+          };
+        }),
         status: resultStatus,
-        storedStatus: app.status,
-        finishPosition: app.finishPosition,
+        storedStatus: raceResult?.status ?? app.status,
+        finishPosition: raceResult?.finishPosition ?? null,
         finished: isFinished,
       };
     });
@@ -846,30 +818,15 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async finalizeRaceResults(raceId: string): Promise<void> {
-    const race = await this.racesRepo.findOne({
-      where: { id: raceId },
-      relations: ['course'],
-    });
-    if (!race) return;
+    const race = await this.loadRace(raceId);
+    if (!race.legId) return;
 
     const targets = this.getRaceTargets(race);
     if (targets.length === 0) return;
 
     const finishIndex = targets.length - 1;
 
-    const apps = await this.applicationsRepo.find({
-      where: {
-        raceId,
-        status: In([
-          ApplicationStatusEnum.APPROVED,
-          ApplicationStatusEnum.CHECKED_IN,
-          ApplicationStatusEnum.DNS,
-          ApplicationStatusEnum.DNF,
-          ApplicationStatusEnum.DSQ,
-        ]),
-      },
-    });
-
+    const apps = await this.getLegApplications(race.legId);
     if (apps.length === 0) return;
 
     const allPasses = await this.checkpointPassRepo.find({
@@ -884,6 +841,9 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       passesByApp[pass.applicationId].push(pass);
     }
 
+    const existingResults = await this.resultsRepo.find({ where: { raceId } });
+    const resultByApp = new Map(existingResults.map((r) => [r.applicationId, r]));
+
     const rankedApps = apps.map((app) => {
       const appPasses = passesByApp[app.id] || [];
       const finishPass = appPasses.find((p) => p.checkpointIndex === finishIndex);
@@ -897,8 +857,9 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      const existing = resultByApp.get(app.id);
       const resultStatus = this.deriveResultStatus({
-        storedStatus: String(app.status),
+        storedStatus: String(existing?.status ?? app.status),
         maxCpIndex,
         finishIndex,
         raceOver: true,
@@ -935,28 +896,39 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     const fleetSize = apps.length;
     let finishPlace = 0;
     for (const item of rankedApps) {
-      item.app.fleetSize = fleetSize;
+      let result = resultByApp.get(item.app.id);
+      if (!result) {
+        result = this.resultsRepo.create({
+          applicationId: item.app.id,
+          raceId,
+        });
+      }
+      result.fleetSize = fleetSize;
 
       if (item.resultStatus === 'FINISHED') {
         finishPlace += 1;
-        item.app.status = ApplicationStatusEnum.APPROVED;
-        item.app.finishPosition = finishPlace;
+        result.status = RaceResultStatusEnum.FINISHED;
+        result.finishPosition = finishPlace;
       } else if (item.resultStatus === ApplicationStatusEnum.DNS) {
-        item.app.status = ApplicationStatusEnum.DNS;
-        item.app.finishPosition = null;
+        result.status = RaceResultStatusEnum.DNS;
+        result.finishPosition = null;
       } else if (item.resultStatus === ApplicationStatusEnum.DSQ) {
-        item.app.status = ApplicationStatusEnum.DSQ;
-        item.app.finishPosition = null;
+        result.status = RaceResultStatusEnum.DSQ;
+        result.finishPosition = null;
       } else if (item.resultStatus === ApplicationStatusEnum.DNF) {
-        item.app.status = ApplicationStatusEnum.DNF;
-        item.app.finishPosition = null;
+        result.status = RaceResultStatusEnum.DNF;
+        result.finishPosition = null;
+      } else {
+        result.status = RaceResultStatusEnum.PENDING;
+        result.finishPosition = null;
       }
 
-      await this.applicationsRepo.save(item.app);
+      await this.resultsRepo.save(result);
     }
 
-    if (race.createdById) {
-      const referee = await this.usersRepo.findOne({ where: { id: race.createdById } });
+    const ownerId = race.leg?.createdById ?? race.createdById;
+    if (ownerId) {
+      const referee = await this.usersRepo.findOne({ where: { id: ownerId } });
       if (referee && referee.email) {
         this.sendResultsEmail(race, referee, rankedApps).catch((e) =>
           console.error('Sonuç maili gönderilemedi:', e),
@@ -1061,7 +1033,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     const id = String(cp?.id || `CP${index + 1}`);
     const kind = String(cp?.kind || cp?.type || '').toLowerCase();
     if (kind === 'start' || index === 0) return `Start (${id})`;
-    if (kind === 'finish' || index === finishIndex) return `Bitiş (${id})`;
+    if (kind === 'finish' || index === finishIndex) return `Finish (${id})`;
     if (kind === 'gate') return `Kapı (${id})`;
     if (kind === 'buoy') return `Şamandıra (${id})`;
     return id;
@@ -1072,23 +1044,12 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     headers: string[];
     rows: string[][];
   }> {
-    const race = await this.racesRepo.findOne({ where: { id }, relations: ['course'] });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
+    const race = await this.loadRace(id);
+    if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
 
-    const applications = await this.applicationsRepo.find({
-      where: {
-        raceId: id,
-        status: In([
-          ApplicationStatusEnum.APPROVED,
-          ApplicationStatusEnum.CHECKED_IN,
-          ApplicationStatusEnum.DNS,
-          ApplicationStatusEnum.DNF,
-          ApplicationStatusEnum.DSQ,
-        ]),
-      },
-      order: { finishPosition: 'ASC' },
-      relations: ['boat'],
-    });
+    const applications = await this.getLegApplications(race.legId);
+    const results = await this.resultsRepo.find({ where: { raceId: id } });
+    const resultByApp = new Map(results.map((r) => [r.applicationId, r]));
 
     const allPasses = await this.checkpointPassRepo.find({
       where: { raceId: id },
@@ -1123,9 +1084,6 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       passesByApp.set(pass.applicationId, list);
     }
 
-    // Recompute each checkpoint's crossing order from the recorded crossing
-    // timestamp. Stored ranks reflect arrival order at the API, which can differ
-    // from actual crossing order when a device syncs late or was offline.
     const crossingRankByAppAndCheckpoint = new Map<string, number>();
     for (let checkpointIndex = 0; checkpointIndex < targets.length; checkpointIndex += 1) {
       const passesAtCheckpoint = allPasses
@@ -1146,27 +1104,37 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    const rows = applications.map((app) => {
+    const sortedApps = [...applications].sort((a, b) => {
+      const ap = resultByApp.get(a.id)?.finishPosition;
+      const bp = resultByApp.get(b.id)?.finishPosition;
+      if (ap != null && bp != null) return ap - bp;
+      if (ap != null) return -1;
+      if (bp != null) return 1;
+      return 0;
+    });
+
+    const rows = sortedApps.map((app) => {
       const appPasses = passesByApp.get(app.id) ?? [];
       const passByIndex = new Map(appPasses.map((p) => [p.checkpointIndex, p]));
       const finishPass = finishIndex >= 0 ? passByIndex.get(finishIndex) : undefined;
+      const raceResult = resultByApp.get(app.id);
 
       const penaltyStatuses = [
-        ApplicationStatusEnum.DNS,
-        ApplicationStatusEnum.DNF,
-        ApplicationStatusEnum.DSQ,
+        RaceResultStatusEnum.DNS,
+        RaceResultStatusEnum.DNF,
+        RaceResultStatusEnum.DSQ,
       ];
       let statusLabel: string;
-      if (penaltyStatuses.includes(app.status as ApplicationStatusEnum)) {
-        statusLabel = String(app.status);
-      } else if (finishPass) {
+      if (raceResult && penaltyStatuses.includes(raceResult.status as RaceResultStatusEnum)) {
+        statusLabel = String(raceResult.status);
+      } else if (finishPass || raceResult?.status === RaceResultStatusEnum.FINISHED) {
         statusLabel = 'FINISHED';
       } else if (app.status === ApplicationStatusEnum.PENDING) {
         statusLabel = 'WFA';
       } else if (app.status === ApplicationStatusEnum.WITHDRAWN) {
         statusLabel = 'WITHDRAWN';
       } else {
-        statusLabel = String(app.status || '—');
+        statusLabel = String(raceResult?.status || app.status || '—');
       }
 
       const checkpointCells = targets.flatMap((_cp, index) => {
@@ -1180,7 +1148,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       });
 
       return [
-        app.finishPosition != null ? String(app.finishPosition) : '-',
+        raceResult?.finishPosition != null ? String(raceResult.finishPosition) : '-',
         app.boatName || '',
         app.sailNumber || '',
         app.boat?.boatClass || '',
@@ -1210,8 +1178,12 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   async exportRaceResults(
     id: string,
     format: RaceResultsExportFormat = 'csv',
-    _user?: SessionUser,
+    user?: SessionUser,
   ): Promise<RaceResultsExportFile> {
+    const race = await this.racesRepo.findOne({ where: { id } });
+    if (!race) throw new NotFoundException('Yarış bulunamadı');
+    if (user) this.assertCanManageRace(race, user);
+
     const { raceTitle, headers, rows } = await this.buildRaceResultsTable(id);
     const baseName = this.sanitizeExportFilename(raceTitle);
 
@@ -1272,6 +1244,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   async getPlaybackData(raceId: string) {
     const race = await this.racesRepo.findOne({ where: { id: raceId } });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
+    if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
 
     const trackPoints = await this.trackPointsRepo.find({
       where: { raceId },
@@ -1280,7 +1253,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     });
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId },
+      where: { legId: race.legId },
       select: ['id', 'boatId', 'boatName', 'sailNumber'],
     });
 
@@ -1315,13 +1288,15 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async getLiveTrails(raceId: string) {
+  async getLiveTrails(raceId: string, user?: SessionUser) {
     const race = await this.racesRepo.findOne({ where: { id: raceId } });
     if (!race) throw new NotFoundException('Yarış bulunamadı');
+    if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
+    if (user) this.assertCanManageRace(race, user);
 
     const applications = await this.applicationsRepo.find({
       where: {
-        raceId,
+        legId: race.legId,
         status: In([ApplicationStatusEnum.APPROVED, ApplicationStatusEnum.CHECKED_IN]),
       },
       select: ['id', 'boatId'],

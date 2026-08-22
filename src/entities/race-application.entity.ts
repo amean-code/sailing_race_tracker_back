@@ -5,23 +5,26 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryColumn,
   Unique,
 } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { ApplicationStatusEnum, PaymentStatusEnum } from '../common/constants';
-import { Race } from './race.entity';
+import { Leg } from './leg.entity';
 import { Boat } from './boat.entity';
 import { User } from './user.entity';
+import { RaceResult } from './race-result.entity';
+import { TrophyGroup } from './trophy-group.entity';
 
 @Entity('race_applications')
-@Unique(['raceId', 'email'])
+@Unique(['legId', 'email'])
 export class RaceApplication {
   @PrimaryColumn('text')
   id!: string;
 
-  @Column({ name: 'race_id' })
-  raceId!: string;
+  @Column({ name: 'leg_id', type: 'text', nullable: true })
+  legId!: string | null;
 
   @Column({ default: '' })
   name!: string;
@@ -50,17 +53,17 @@ export class RaceApplication {
   @Column({ name: 'boat_id', type: 'text', nullable: true })
   boatId!: string | null;
 
+  @Column({ name: 'group_id', type: 'text', nullable: true })
+  groupId!: string | null;
+
+  @Column({ name: 'temporary_group_assignment', type: 'boolean', default: false })
+  temporaryGroupAssignment!: boolean;
+
   @Column({ name: 'user_id', type: 'text', nullable: true })
   userId!: string | null;
 
   @Column({ name: 'checked_in_at', type: 'timestamp', nullable: true })
   checkedInAt!: Date | null;
-
-  @Column({ name: 'finish_position', type: 'int', nullable: true })
-  finishPosition!: number | null;
-
-  @Column({ name: 'fleet_size', type: 'int', nullable: true })
-  fleetSize!: number | null;
 
   @Column({ name: 'crew_members', type: 'jsonb', nullable: true })
   crewMembers!: string[] | null;
@@ -87,17 +90,24 @@ export class RaceApplication {
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 
-  @ManyToOne(() => Race, (race) => race.applications, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'race_id' })
-  race!: Race;
+  @ManyToOne(() => Leg, (leg) => leg.applications, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'leg_id' })
+  leg!: Leg;
 
   @ManyToOne(() => Boat, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'boat_id' })
   boat!: Boat | null;
 
+  @ManyToOne(() => TrophyGroup, (group) => group.applications, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'group_id' })
+  group!: TrophyGroup | null;
+
   @ManyToOne(() => User, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'user_id' })
   user!: User | null;
+
+  @OneToMany(() => RaceResult, (result) => result.application)
+  results!: RaceResult[];
 
   @BeforeInsert()
   generateId() {

@@ -33,9 +33,24 @@ export enum RaceStatusEnum {
   CANCELLED = 'CANCELLED',
 }
 
+/** @deprecated Use LegKindEnum — kept for migration compatibility */
 export enum RaceTypeEnum {
   REGATA = 'REGATA',
   TROFE_LEG = 'TROFE_LEG',
+}
+
+export enum LegKindEnum {
+  TROFE_LEG = 'TROFE_LEG',
+  REGATA = 'REGATA',
+  SINGLE = 'SINGLE',
+}
+
+export enum RaceResultStatusEnum {
+  PENDING = 'PENDING',
+  FINISHED = 'FINISHED',
+  DNS = 'DNS',
+  DNF = 'DNF',
+  DSQ = 'DSQ',
 }
 
 export enum TrophyStatusEnum {

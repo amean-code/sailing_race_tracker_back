@@ -3,9 +3,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Race } from '../entities/race.entity';
+import { RaceResult } from '../entities/race-result.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
-import { RaceStatusEnum, ApplicationStatusEnum } from '../common/constants';
-import { serializeRace } from '../common/utils/serialize-race';
+import {
+  RaceStatusEnum,
+  ApplicationStatusEnum,
+  RaceResultStatusEnum,
+} from '../common/constants';
+import { computeRegistrationState, serializeRace } from '../common/utils/serialize-race';
 import { SessionUser } from '../common/decorators';
 import { resolveTrackingConfig } from '../common/tracking-config';
 import { Boat } from '../entities/boat.entity';
@@ -21,7 +26,12 @@ type RaceWithApplication = {
     finishPosition: number | null;
     fleetSize: number | null;
   };
-  race: ReturnType<typeof serializeRace>;
+  race: ReturnType<typeof serializeRace> & {
+    registrationOpen?: boolean;
+    appliedCount?: number;
+    spotsLeft?: number;
+    registrationStatus?: string;
+  };
 };
 
 @Injectable()
@@ -31,6 +41,8 @@ export class SailorService {
     private readonly applicationsRepo: Repository<RaceApplication>,
     @InjectRepository(Race)
     private readonly racesRepo: Repository<Race>,
+    @InjectRepository(RaceResult)
+    private readonly resultsRepo: Repository<RaceResult>,
     @InjectRepository(CheckpointPass)
     private readonly checkpointPassRepo: Repository<CheckpointPass>,
     @InjectRepository(Boat)
@@ -38,28 +50,44 @@ export class SailorService {
   ) { }
 
   private async raceWithCount(race: Race) {
-    const applicationCount = await this.applicationsRepo.count({
-      where: { raceId: race.id },
-    });
-    return serializeRace({ ...race, applicationCount });
+    const applicationCount = race.legId
+      ? await this.applicationsRepo.count({ where: { legId: race.legId } })
+      : 0;
+    const serialized = serializeRace(race);
+    const reg = computeRegistrationState(
+      {
+        status: race.status,
+        registrationDeadline: race.leg?.registrationDeadline ?? null,
+        capacity: race.leg?.capacity ?? 30,
+      },
+      applicationCount,
+    );
+    return { ...serialized, ...reg };
   }
 
-  private mapApplication(app: RaceApplication) {
+  private mapApplication(
+    app: RaceApplication,
+    result?: Pick<RaceResult, 'finishPosition' | 'fleetSize' | 'status'> | null,
+  ) {
     return {
       id: app.id,
       boatName: app.boatName,
       sailNumber: app.sailNumber,
       club: app.club,
-      status: app.status,
+      status: result?.status ?? app.status,
       createdAt: app.createdAt.toISOString(),
-      finishPosition: app.finishPosition,
-      fleetSize: app.fleetSize,
+      finishPosition: result?.finishPosition ?? null,
+      fleetSize: result?.fleetSize ?? null,
     };
   }
 
-  private toRaceEntry(app: RaceApplication, race: ReturnType<typeof serializeRace>): RaceWithApplication {
+  private toRaceEntry(
+    app: RaceApplication,
+    race: RaceWithApplication['race'],
+    result?: Pick<RaceResult, 'finishPosition' | 'fleetSize' | 'status'> | null,
+  ): RaceWithApplication {
     return {
-      application: this.mapApplication(app),
+      application: this.mapApplication(app, result),
       race,
     };
   }
@@ -68,26 +96,56 @@ export class SailorService {
     const email = user.email.toLowerCase();
     const applications = await this.applicationsRepo.find({
       where: { email },
-      select: ['raceId'],
+      select: ['legId'],
     });
-    return applications.map((app) => app.raceId);
+    const legIds = [...new Set(applications.map((app) => app.legId).filter(Boolean))];
+    if (legIds.length === 0) return [];
+
+    const races = await this.racesRepo.find({
+      where: { legId: In(legIds) },
+      select: ['id'],
+    });
+    return races.map((r) => r.id);
   }
 
   async getActiveRace(user: SessionUser) {
     const email = user.email.toLowerCase();
-    // Include DNS/DNF/DSQ so sailors still see the "race finished" screen after finalizeRaceResults
     const applications = await this.applicationsRepo.find({
       where: [
         { email, status: ApplicationStatusEnum.PENDING },
         { email, status: ApplicationStatusEnum.APPROVED },
         { email, status: ApplicationStatusEnum.CHECKED_IN },
-        { email, status: ApplicationStatusEnum.DNS },
-        { email, status: ApplicationStatusEnum.DNF },
-        { email, status: ApplicationStatusEnum.DSQ },
       ],
-      relations: ['race', 'race.course'],
+      relations: ['leg'],
       order: { createdAt: 'DESC' },
     });
+
+    if (applications.length === 0) {
+      return { activeRace: null, activeRaces: [] };
+    }
+
+    const legIds = [...new Set(applications.map((a) => a.legId))];
+    const races = await this.racesRepo.find({
+      where: { legId: In(legIds) },
+      relations: ['course', 'leg'],
+    });
+    const racesByLeg = new Map<string, Race[]>();
+    for (const race of races) {
+      if (!race.legId) continue;
+      const list = racesByLeg.get(race.legId) ?? [];
+      list.push(race);
+      racesByLeg.set(race.legId, list);
+    }
+
+    const results = await this.resultsRepo.find({
+      where: {
+        applicationId: In(applications.map((a) => a.id)),
+        raceId: In(races.map((r) => r.id)),
+      },
+    });
+    const resultByKey = new Map(
+      results.map((r) => [`${r.applicationId}:${r.raceId}`, r]),
+    );
 
     const liveAppStatuses = new Set([
       ApplicationStatusEnum.PENDING,
@@ -96,42 +154,44 @@ export class SailorService {
     ]);
     const resultWindowMs = 15 * 60 * 1000;
 
-    const activeList = applications.filter((app) => {
-      if (!app.race) return false;
-      const raceStatus = app.race.status;
+    type ActivePair = { app: RaceApplication; race: Race };
+    const activeList: ActivePair[] = [];
 
-      if (raceStatus === RaceStatusEnum.IN_PROGRESS || raceStatus === RaceStatusEnum.OPEN) {
-        // Mid-race: only applications still eligible to race / track
-        return liveAppStatuses.has(app.status as ApplicationStatusEnum);
+    for (const app of applications) {
+      if (!liveAppStatuses.has(app.status as ApplicationStatusEnum)) continue;
+      if (!app.legId) continue;
+      const legRaces = racesByLeg.get(app.legId) ?? [];
+      for (const race of legRaces) {
+        const raceStatus = race.status;
+        if (raceStatus === RaceStatusEnum.IN_PROGRESS || raceStatus === RaceStatusEnum.OPEN) {
+          activeList.push({ app, race });
+          continue;
+        }
+        if (raceStatus === RaceStatusEnum.FINISHED || raceStatus === RaceStatusEnum.CANCELLED) {
+          const updatedTime = new Date(race.updatedAt).getTime();
+          if (Date.now() - updatedTime < resultWindowMs) {
+            activeList.push({ app, race });
+          }
+        }
       }
-
-      if (raceStatus === RaceStatusEnum.FINISHED || raceStatus === RaceStatusEnum.CANCELLED) {
-        // Keep recently closed races so every sailor (incl. DNS/DNF/DSQ) gets the end screen
-        const updatedTime = new Date(app.race.updatedAt).getTime();
-        return Date.now() - updatedTime < resultWindowMs;
-      }
-
-      return false;
-    });
+    }
 
     if (activeList.length === 0) {
       return { activeRace: null, activeRaces: [] };
     }
 
-    // Nearest race date first (scheduledStartAt when countdown is set, else startDate).
-    // Recently finished/cancelled races stay at the end.
-    const getRaceSortTime = (app: RaceApplication): number => {
-      const scheduled = app.race?.raceState?.scheduledStartAt;
+    const getRaceSortTime = (pair: ActivePair): number => {
+      const scheduled = pair.race.raceState?.scheduledStartAt;
       if (typeof scheduled === 'string') {
         const t = new Date(scheduled).getTime();
         if (!Number.isNaN(t)) return t;
       }
-      const start = app.race?.startDate;
+      const start = pair.race.startDate;
       return start ? new Date(start).getTime() : Number.MAX_SAFE_INTEGER;
     };
 
-    const isClosedRace = (app: RaceApplication): boolean => {
-      const status = app.race?.status;
+    const isClosedRace = (pair: ActivePair): boolean => {
+      const status = pair.race.status;
       return status === RaceStatusEnum.FINISHED || status === RaceStatusEnum.CANCELLED;
     };
 
@@ -142,16 +202,18 @@ export class SailorService {
       return getRaceSortTime(a) - getRaceSortTime(b);
     });
 
-    const appIds = activeList.map(app => app.id);
+    const appIds = activeList.map((p) => p.app.id);
+    const raceIds = [...new Set(activeList.map((p) => p.race.id))];
     const passes = await this.checkpointPassRepo.find({
-      where: { applicationId: In(appIds) },
+      where: { applicationId: In(appIds), raceId: In(raceIds) },
       order: { checkpointIndex: 'ASC' },
     });
 
-    const passesByApp = new Map<string, any[]>();
+    const passesByAppRace = new Map<string, any[]>();
     for (const p of passes) {
-      if (!passesByApp.has(p.applicationId)) passesByApp.set(p.applicationId, []);
-      passesByApp.get(p.applicationId)!.push({
+      const key = `${p.applicationId}:${p.raceId}`;
+      if (!passesByAppRace.has(key)) passesByAppRace.set(key, []);
+      passesByAppRace.get(key)!.push({
         checkpointIndex: p.checkpointIndex,
         checkpointId: p.checkpointId,
         passedAt: p.passedAt.toISOString(),
@@ -159,26 +221,28 @@ export class SailorService {
       });
     }
 
-    const mapActiveRace = (app: RaceApplication) => {
-      const raceState = app.race?.raceState ?? {};
+    const mapActiveRace = (pair: ActivePair) => {
+      const { app, race } = pair;
+      const raceState = race.raceState ?? {};
       const tracking = (raceState.tracking as Record<string, unknown> | undefined) ?? {};
       const startedAt = (raceState.startedAt as string | undefined) ?? null;
       const scheduledStartAt = (raceState.scheduledStartAt as string | undefined) ?? null;
-      const courseSnapshot = app.race?.courseSnapshot ?? null;
-      
-      const appPasses = passesByApp.get(app.id) || [];
+      const courseSnapshot = race.courseSnapshot ?? null;
+      const raceResult = resultByKey.get(`${app.id}:${race.id}`);
+
+      const appPasses = passesByAppRace.get(`${app.id}:${race.id}`) || [];
       const activeTargetIndex = appPasses.length > 0 ? Math.max(...appPasses.map(p => p.checkpointIndex)) + 1 : 0;
 
       const checkpoints =
         (courseSnapshot?.checkpoints as any[]) ??
-        (app.race?.course?.checkpoints as any[]) ??
+        (race.course?.checkpoints as any[]) ??
         [];
       const targets = checkpoints.filter((cp: any) => {
         const k = cp.kind || cp.type;
         return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
       });
       const hasFinished = targets.length > 0 && activeTargetIndex >= targets.length;
-      
+
       let elapsedSeconds = null;
       if (startedAt) {
         elapsedSeconds = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
@@ -189,7 +253,6 @@ export class SailorService {
         }
       }
 
-      // Prefer finish-line elapsed when sailor already finished
       if (hasFinished) {
         const finishPass = appPasses.find((p) => p.checkpointIndex === targets.length - 1);
         if (finishPass?.elapsedSeconds != null) {
@@ -197,19 +260,30 @@ export class SailorService {
         }
       }
 
+      const resultStatus = raceResult?.status;
+      const applicationStatus =
+        hasFinished || resultStatus === RaceResultStatusEnum.FINISHED
+          ? 'FINISHED'
+          : resultStatus === RaceResultStatusEnum.DNS ||
+              resultStatus === RaceResultStatusEnum.DNF ||
+              resultStatus === RaceResultStatusEnum.DSQ
+            ? resultStatus
+            : app.status;
+
       return {
-        raceId: app.raceId,
+        raceId: race.id,
+        legId: app.legId,
         boatId: app.boatId,
-        courseId: app.race?.courseId ?? null,
+        courseId: race.courseId ?? null,
         courseSnapshot,
         applicationId: app.id,
-        applicationStatus: hasFinished ? 'FINISHED' : app.status,
+        applicationStatus,
         sailNumber: app.sailNumber,
         boatName: app.boatName,
-        raceTitle: app.race?.title ?? '',
-        raceStatus: app.race?.status ?? null,
+        raceTitle: race.title || app.leg?.title || '',
+        raceStatus: race.status ?? null,
         raceStartedAt: startedAt,
-        raceFinishedAt: app.race?.raceState?.finishedAt ?? null,
+        raceFinishedAt: race.raceState?.finishedAt ?? null,
         scheduledStartAt: scheduledStartAt,
         trackingConfig: resolveTrackingConfig(tracking),
         passedCheckpoints: appPasses,
@@ -224,7 +298,6 @@ export class SailorService {
 
     const activeRaces = activeList.map(mapActiveRace);
 
-    // Prefer a live race (in progress or countdown running), else nearest by date
     const preferred =
       activeRaces.find((r) => r.raceStatus === RaceStatusEnum.IN_PROGRESS) ||
       activeRaces.find((r) => r.raceStatus === RaceStatusEnum.OPEN && r.scheduledStartAt) ||
@@ -242,32 +315,69 @@ export class SailorService {
 
     const applications = await this.applicationsRepo.find({
       where: { email },
-      relations: ['race', 'race.course'],
+      relations: ['leg'],
       order: { createdAt: 'DESC' },
     });
 
+    const legIds = [...new Set(applications.map((a) => a.legId).filter(Boolean))];
+    const races = legIds.length
+      ? await this.racesRepo.find({
+          where: { legId: In(legIds) },
+          relations: ['course', 'leg'],
+          order: { startDate: 'ASC' },
+        })
+      : [];
+
+    const raceIds = races.map((r) => r.id);
+    const results = raceIds.length
+      ? await this.resultsRepo.find({
+          where: {
+            raceId: In(raceIds),
+            applicationId: In(applications.map((a) => a.id)),
+          },
+        })
+      : [];
+    const resultByKey = new Map(
+      results.map((r) => [`${r.applicationId}:${r.raceId}`, r]),
+    );
+
+    const racesByLeg = new Map<string, Race[]>();
+    for (const race of races) {
+      if (!race.legId) continue;
+      const list = racesByLeg.get(race.legId) ?? [];
+      list.push(race);
+      racesByLeg.set(race.legId, list);
+    }
+
     const registered: RaceWithApplication[] = [];
     for (const app of applications) {
-      if (!app.race) continue;
-      const race = await this.raceWithCount(app.race);
-      registered.push(this.toRaceEntry(app, race));
+      if (!app.legId) continue;
+      const legRaces = racesByLeg.get(app.legId) ?? [];
+      for (const race of legRaces) {
+        const serialized = await this.raceWithCount(race);
+        registered.push(
+          this.toRaceEntry(app, serialized, resultByKey.get(`${app.id}:${race.id}`)),
+        );
+      }
     }
 
     const appIds = applications.map((a) => a.id);
     let passes: CheckpointPass[] = [];
-    if (appIds.length > 0) {
+    if (appIds.length > 0 && raceIds.length > 0) {
       passes = await this.checkpointPassRepo.find({
-        where: { applicationId: In(appIds) }
+        where: { applicationId: In(appIds), raceId: In(raceIds) },
       });
     }
 
     const completed = registered
       .filter((entry) => {
-        const isRaceFinished = entry.race.status === RaceStatusEnum.FINISHED;
+        const status = String(entry.race.status).toLowerCase();
+        const isRaceFinished = status === 'finished';
         const isPastEndDate = entry.race.endDate && new Date(entry.race.endDate) < now;
 
-        // Check if sailor passed all race targets (start/buoy/gate/finish)
-        const entryPasses = passes.filter(p => p.applicationId === entry.application.id);
+        const entryPasses = passes.filter(
+          (p) => p.applicationId === entry.application.id && p.raceId === entry.race.id,
+        );
         const maxCp = entryPasses.length > 0 ? Math.max(...entryPasses.map(p => p.checkpointIndex)) : -1;
         const checkpoints =
           (entry.race.courseSnapshot?.checkpoints as any[]) ??
@@ -300,14 +410,19 @@ export class SailorService {
       ? Math.round((positions.reduce((s, p) => s + p, 0) / positions.length) * 10) / 10
       : null;
 
-    const appliedRaceIds = new Set(applications.map((a) => a.raceId));
+    const appliedLegIds = new Set(applications.map((a) => a.legId));
     const openRaces = await this.racesRepo.find({
       where: { status: RaceStatusEnum.OPEN },
+      relations: ['leg'],
       order: { startDate: 'ASC' },
     });
 
     const discoverCandidates = openRaces.filter(
-      (r) => !appliedRaceIds.has(r.id) && r.startDate > now,
+      (r) =>
+        r.legId != null &&
+        !appliedLegIds.has(r.legId) &&
+        r.startDate != null &&
+        r.startDate > now,
     );
     const discoverRaces = (
       await Promise.all(discoverCandidates.map((r) => this.raceWithCount(r)))
@@ -315,7 +430,7 @@ export class SailorService {
       .filter((race) => race.registrationOpen)
       .slice(0, 5);
 
-    const daysUntilNextRace = nextRace
+    const daysUntilNextRace = nextRace?.race?.startDate
       ? Math.max(
         0,
         Math.ceil(
@@ -350,28 +465,37 @@ export class SailorService {
   async getRaceResults(raceId: string, user: SessionUser) {
     const email = user.email.toLowerCase();
 
-    // Find the application for this user in this race
-    const app = await this.applicationsRepo.findOne({
-      where: { raceId, email },
-      relations: ['race'],
+    const race = await this.racesRepo.findOne({
+      where: { id: raceId },
+      relations: ['leg'],
     });
-
-    if (!app || !app.race) {
+    if (!race?.legId) {
       return { results: null };
     }
 
-    // Get all checkpoint passes for this application
+    const app = await this.applicationsRepo.findOne({
+      where: { legId: race.legId, email },
+    });
+
+    if (!app) {
+      return { results: null };
+    }
+
+    const raceResult = await this.resultsRepo.findOne({
+      where: { applicationId: app.id, raceId },
+    });
+
     const passes = await this.checkpointPassRepo.find({
       where: { applicationId: app.id, raceId },
       order: { checkpointIndex: 'ASC' },
     });
 
-    // Get total competitors who finished (for fleet size context)
-    const fleetSize = await this.applicationsRepo.count({ where: { raceId } });
+    const fleetSize =
+      raceResult?.fleetSize ??
+      (await this.applicationsRepo.count({ where: { legId: race.legId } }));
 
-    const raceStartedAt = app.race.raceState?.startedAt as string | undefined;
+    const raceStartedAt = race.raceState?.startedAt as string | undefined;
 
-    // Compute inter-checkpoint segment durations
     const segments = passes.map((p, idx) => {
       const prevElapsed = idx === 0 ? 0 : (passes[idx - 1].elapsedSeconds ?? 0);
       const segmentSeconds = p.elapsedSeconds != null ? p.elapsedSeconds - prevElapsed : null;
@@ -392,15 +516,16 @@ export class SailorService {
     return {
       results: {
         raceId,
-        raceTitle: app.race.title,
+        legId: race.legId,
+        raceTitle: race.title,
         sailNumber: app.sailNumber,
         boatName: app.boatName,
-        finishPosition: app.finishPosition,
-        fleetSize: app.fleetSize ?? fleetSize,
+        finishPosition: raceResult?.finishPosition ?? null,
+        fleetSize,
         raceStartedAt: raceStartedAt ?? null,
         totalElapsedSeconds: totalElapsed,
         segments,
-        status: app.status,
+        status: raceResult?.status ?? app.status,
       },
     };
   }
@@ -409,17 +534,17 @@ export class SailorService {
     const email = user.email.toLowerCase();
     const applications = await this.applicationsRepo.find({
       where: { email },
-      relations: ['race'],
+      relations: ['leg'],
       order: { createdAt: 'DESC' },
     });
 
     return applications.map((app) => ({
       id: app.id,
-      raceId: app.race?.id,
-      raceTitle: app.race?.title,
-      raceStartDate: app.race?.startDate,
-      raceStatus: app.race?.status,
-      refereeName: app.race?.organizer ?? 'Sistem',
+      legId: app.legId,
+      raceTitle: app.leg?.title,
+      raceStartDate: app.leg?.startDate,
+      raceStatus: app.leg?.status,
+      refereeName: app.leg?.organizer ?? 'Sistem',
       boatId: app.boatId,
       boatName: app.boatName,
       sailNumber: app.sailNumber,
@@ -438,29 +563,36 @@ export class SailorService {
   }
 
   async getRaceLeaderboard(raceId: string, user: SessionUser) {
-    // Verify the requesting user participated in this race (or is admin/committee)
     const email = user?.email?.toLowerCase() || '';
+    const race = await this.racesRepo.findOne({
+      where: { id: raceId },
+      relations: ['course', 'leg'],
+    });
+    if (!race?.legId) {
+      return { leaderboard: [], raceId, total: 0 };
+    }
+
     const myApp = await this.applicationsRepo.findOne({
-      where: { raceId, email },
+      where: { legId: race.legId, email },
     });
 
-    // Allow access only if the user participated OR has elevated role
     const allowedRoles = ['ADMIN', 'COMMITTEE'];
     if (!myApp && !allowedRoles.includes(user.role)) {
       return { leaderboard: [], raceId, total: 0 };
     }
 
     const applications = await this.applicationsRepo.find({
-      where: { raceId },
-      relations: ['race', 'race.course'],
-      order: { finishPosition: 'ASC', createdAt: 'ASC' },
+      where: { legId: race.legId },
+      order: { createdAt: 'ASC' },
     });
 
     if (applications.length === 0) {
       return { leaderboard: [], raceId, total: 0 };
     }
 
-    // Get all checkpoint passes for this race to compute elapsed times
+    const results = await this.resultsRepo.find({ where: { raceId } });
+    const resultByApp = new Map(results.map((r) => [r.applicationId, r]));
+
     const allPasses = await this.checkpointPassRepo.find({
       where: { raceId },
       order: { checkpointIndex: 'ASC' },
@@ -474,10 +606,9 @@ export class SailorService {
       passesByApp.get(pass.applicationId)!.push(pass);
     }
 
-    const race = applications[0]?.race;
     const checkpoints =
-      (race?.courseSnapshot?.checkpoints as any[]) ??
-      (race?.course?.checkpoints as any[]) ??
+      (race.courseSnapshot?.checkpoints as any[]) ??
+      (race.course?.checkpoints as any[]) ??
       [];
     const targets = checkpoints.filter((cp: any) => {
       const k = cp.kind || cp.type;
@@ -487,6 +618,9 @@ export class SailorService {
     const finishIndex = totalCheckpoints > 0 ? totalCheckpoints - 1 : -1;
 
     const leaderboard = applications.map((app, index) => {
+      const raceResult = resultByApp.get(app.id);
+      const finishPosition = raceResult?.finishPosition ?? null;
+      const fleetSize = raceResult?.fleetSize ?? null;
       const appPasses = passesByApp.get(app.id) ?? [];
       const lastPass = appPasses.length > 0
         ? appPasses.reduce((latest, p) => (p.checkpointIndex > latest.checkpointIndex ? p : latest), appPasses[0])
@@ -496,16 +630,15 @@ export class SailorService {
       const checkpointsReached = appPasses.length;
       const isFinished =
         (finishIndex >= 0 && maxCpIndex === finishIndex) ||
-        app.finishPosition != null;
+        finishPosition != null ||
+        raceResult?.status === RaceResultStatusEnum.FINISHED;
 
-      // Prefer persisted result statuses; map completed finishers for UI
-      let status: string = app.status;
-      if (isFinished && (status === ApplicationStatusEnum.APPROVED || status === ApplicationStatusEnum.CHECKED_IN)) {
+      let status: string = raceResult?.status ?? app.status;
+      if (isFinished && (status === ApplicationStatusEnum.APPROVED || status === ApplicationStatusEnum.CHECKED_IN || status === RaceResultStatusEnum.PENDING)) {
         status = 'FINISHED';
       }
 
-      // Assign display position: use stored finishPosition or fallback to array index
-      const displayPosition = app.finishPosition ?? (index + 1);
+      const displayPosition = finishPosition ?? (index + 1);
 
       return {
         rank: displayPosition,
@@ -514,8 +647,8 @@ export class SailorService {
         boatName: app.boatName,
         sailNumber: app.sailNumber,
         club: app.club,
-        finishPosition: app.finishPosition,
-        fleetSize: app.fleetSize,
+        finishPosition,
+        fleetSize,
         totalElapsedSeconds,
         checkpointsReached,
         totalCheckpoints,
@@ -525,24 +658,21 @@ export class SailorService {
       };
     });
 
-    // Sort: finished entries by finishPosition ASC, then DNF/pending at the bottom
     leaderboard.sort((a, b) => {
       if (a.finishPosition != null && b.finishPosition != null) return a.finishPosition - b.finishPosition;
       if (a.finishPosition != null) return -1;
       if (b.finishPosition != null) return 1;
-      // Both unranked — sort by checkpoints reached desc
       return b.checkpointsReached - a.checkpointsReached;
     });
 
-    // Re-assign visual rank after sort
     leaderboard.forEach((entry, i) => {
       entry.rank = i + 1;
     });
 
     return {
       raceId,
-      raceTitle: race?.title ?? '',
-      raceStatus: race?.status ?? '',
+      raceTitle: race.title ?? '',
+      raceStatus: race.status ?? '',
       total: leaderboard.length,
       leaderboard,
     };

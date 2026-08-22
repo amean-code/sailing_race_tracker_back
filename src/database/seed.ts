@@ -7,21 +7,29 @@ import { User } from '../entities/user.entity';
 import { Course } from '../entities/course.entity';
 import { Boat } from '../entities/boat.entity';
 import { Race } from '../entities/race.entity';
+import { Leg } from '../entities/leg.entity';
 import { RaceApplication } from '../entities/race-application.entity';
-import { UserRoleEnum, UserStatusEnum, RaceStatusEnum } from '../common/constants';
+import { RaceResult } from '../entities/race-result.entity';
+import {
+  UserRoleEnum,
+  UserStatusEnum,
+  RaceStatusEnum,
+  RaceResultStatusEnum,
+  LegKindEnum,
+} from '../common/constants';
 import { syncSuperAdmins } from '../common/utils/super-admin-bootstrap';
 
 const defaultCourseData = {
   name: 'Bodrum Bay Offshore',
   checkpoints: [
-    { id: 'start', type: 'start', coord: [37.0255, 27.4325], width: 100, rotationDeg: 270, crossing: 'center' },
+    { id: 'start', type: 'start', coord: [37.0255, 27.4325], width: 100, bearingDeg: 270, crossing: 'center' },
     { id: 'buoy-1', type: 'buoy', coord: [37.01, 27.4], rounding: 'port' },
     { id: 'buoy-2', type: 'buoy', coord: [36.995, 27.45], rounding: 'starboard' },
-    { id: 'finish', type: 'finish', coord: [37.0255, 27.4325], width: 100, rotationDeg: 270, crossing: 'center' },
+    { id: 'finish', type: 'finish', coord: [37.0255, 27.4325], width: 100, bearingDeg: 270, crossing: 'center' },
   ],
 };
 
-const sampleRaces = [
+const sampleLegs = [
   {
     title: 'Bodrum Körfezi Offshore',
     description: 'Bodrum körfezinde tek günlük offshore yarış.',
@@ -34,6 +42,8 @@ const sampleRaces = [
     capacity: 35,
     status: RaceStatusEnum.OPEN,
     organizer: 'Bodrum Yelken Kulübü',
+    kind: LegKindEnum.SINGLE,
+    raceTitle: 'Bodrum Körfezi Offshore',
   },
   {
     title: 'Göcek Bahar Regattası',
@@ -47,6 +57,8 @@ const sampleRaces = [
     capacity: 24,
     status: RaceStatusEnum.OPEN,
     organizer: 'Göcek Marina YC',
+    kind: LegKindEnum.REGATA,
+    raceTitle: 'Yarış 1',
   },
 ];
 
@@ -114,6 +126,7 @@ async function main() {
   const courseRepo = AppDataSource.getRepository(Course);
   const boatRepo = AppDataSource.getRepository(Boat);
   const raceRepo = AppDataSource.getRepository(Race);
+  const legRepo = AppDataSource.getRepository(Leg);
 
   await syncSuperAdmins(userRepo, console);
 
@@ -149,27 +162,9 @@ async function main() {
     console.log('Seeded admin@bayk.test / admin12345');
   }
 
-  await ensureAdminUser(
-    userRepo,
-    'amean.hesaplar@gmail.com',
-    'Amean1415',
-    'Amean Admin',
-  );
-
-  await ensureAdminUser(
-    userRepo,
-    'emredgli07@gmail.com',
-    '11120617Hed',
-    'Emre Admin',
-  );
-
-  await ensureCommitteeUser(
-    userRepo,
-    'emre@hakem.com',
-    'hakem123',
-    'Emre Hakem',
-  );
-
+  await ensureAdminUser(userRepo, 'amean.hesaplar@gmail.com', 'Amean1415', 'Amean Admin');
+  await ensureAdminUser(userRepo, 'emredgli07@gmail.com', '11120617Hed', 'Emre Admin');
+  await ensureCommitteeUser(userRepo, 'emre@hakem.com', 'hakem123', 'Emre Hakem');
 
   const demoEmail = 'demo@bayk.test';
   if (!(await userRepo.findOne({ where: { email: demoEmail } }))) {
@@ -189,16 +184,40 @@ async function main() {
 
   const raceCount = await raceRepo.count();
   if (raceCount === 0) {
-    for (const race of sampleRaces) {
+    for (const sample of sampleLegs) {
+      const leg = await legRepo.save(
+        legRepo.create({
+          title: sample.title,
+          description: sample.description,
+          location: sample.location,
+          venue: sample.venue,
+          startDate: sample.startDate,
+          endDate: sample.endDate,
+          registrationDeadline: sample.registrationDeadline,
+          boatClass: sample.boatClass,
+          capacity: sample.capacity,
+          status: sample.status,
+          organizer: sample.organizer,
+          kind: sample.kind,
+          assignedCommitteeId: committeeUser?.id ?? null,
+          createdById: committeeUser?.id ?? null,
+        }),
+      );
       await raceRepo.save(
         raceRepo.create({
-          ...race,
+          title: sample.raceTitle,
+          description: sample.description,
+          startDate: sample.startDate,
+          endDate: sample.endDate,
+          status: sample.status,
+          legId: leg.id,
+          raceOrder: 1,
           courseId: seededCourse?.id ?? null,
           createdById: committeeUser?.id ?? null,
         }),
       );
     }
-    console.log(`Seeded ${sampleRaces.length} races`);
+    console.log(`Seeded ${sampleLegs.length} legs with races`);
   } else if (seededCourse) {
     const unlinked = await raceRepo.find({ where: { courseId: IsNull() } });
     for (const race of unlinked) {
@@ -213,43 +232,54 @@ async function main() {
   const appRepo = AppDataSource.getRepository(RaceApplication);
   const demoUser = await userRepo.findOne({ where: { email: demoEmail } });
   const allRaces = await raceRepo.find({ order: { startDate: 'ASC' } });
+  const allLegs = await legRepo.find();
 
   if (demoUser && allRaces.length > 0) {
-    const gocek = allRaces.find((r) => r.title.includes('Göcek'));
-    const bodrum = allRaces.find((r) => r.title.includes('Bodrum'));
+    const gocekLeg = allLegs.find((l) => l.title.includes('Göcek'));
+    const bodrumLeg = allLegs.find((l) => l.title.includes('Bodrum'));
+    const gocekRace = gocekLeg ? allRaces.find((r) => r.legId === gocekLeg.id) : undefined;
+    const bodrumRace = bodrumLeg ? allRaces.find((r) => r.legId === bodrumLeg.id) : undefined;
+    const resultRepo = AppDataSource.getRepository(RaceResult);
 
-    if (gocek) {
-      gocek.status = RaceStatusEnum.FINISHED;
-      await raceRepo.save(gocek);
+    if (gocekRace?.legId) {
+      gocekRace.status = RaceStatusEnum.FINISHED;
+      await raceRepo.save(gocekRace);
 
       const existingGocek = await appRepo.findOne({
-        where: { raceId: gocek.id, email: demoEmail },
+        where: { legId: gocekRace.legId, email: demoEmail },
       });
       if (!existingGocek) {
-        await appRepo.save(
+        const savedApp = await appRepo.save(
           appRepo.create({
-            raceId: gocek.id,
+            legId: gocekRace.legId,
             name: demoUser.name ?? 'Demo Yarışçı',
             email: demoEmail,
             boatName: 'Rüzgar',
             sailNumber: 'TUR 42',
             club: 'Bodrum YC',
+          }),
+        );
+        await resultRepo.save(
+          resultRepo.create({
+            applicationId: savedApp.id,
+            raceId: gocekRace.id,
             finishPosition: 3,
             fleetSize: 18,
+            status: RaceResultStatusEnum.FINISHED,
           }),
         );
         console.log('Seeded demo application for Göcek (3rd of 18)');
       }
     }
 
-    if (bodrum) {
+    if (bodrumRace?.legId) {
       const existingBodrum = await appRepo.findOne({
-        where: { raceId: bodrum.id, email: demoEmail },
+        where: { legId: bodrumRace.legId, email: demoEmail },
       });
       if (!existingBodrum) {
         await appRepo.save(
           appRepo.create({
-            raceId: bodrum.id,
+            legId: bodrumRace.legId,
             name: demoUser.name ?? 'Demo Yarışçı',
             email: demoEmail,
             boatName: 'Rüzgar',

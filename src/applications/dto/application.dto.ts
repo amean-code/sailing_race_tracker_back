@@ -1,20 +1,36 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsIn, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsOptional, IsString } from 'class-validator';
 import { ApplicationStatusEnum, PaymentStatusEnum } from '../../common/constants';
 
-const STATUSES = Object.values(ApplicationStatusEnum);
+const APP_MANAGE_STATUSES = [
+  ApplicationStatusEnum.PENDING,
+  ApplicationStatusEnum.APPROVED,
+  ApplicationStatusEnum.CHECKED_IN,
+  ApplicationStatusEnum.WITHDRAWN,
+] as const;
+
 const PAYMENT_REVIEW = [PaymentStatusEnum.APPROVED, PaymentStatusEnum.REJECTED];
 
 export class UpdateApplicationDto {
-  @ApiPropertyOptional({ enum: STATUSES })
+  @ApiPropertyOptional({ enum: APP_MANAGE_STATUSES })
   @IsOptional()
-  @IsIn(STATUSES)
+  @IsIn([...APP_MANAGE_STATUSES])
   status?: ApplicationStatusEnum;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   notes?: string | null;
+
+  @ApiPropertyOptional({ description: 'Trofe başvurusu onayında zorunlu grup id' })
+  @IsOptional()
+  @IsString()
+  groupId?: string | null;
+
+  @ApiPropertyOptional({ description: 'Kapasite doluyken geçici atama' })
+  @IsOptional()
+  @IsBoolean()
+  temporaryGroupAssignment?: boolean;
 }
 
 export class BulkUpdateApplicationDto {
@@ -22,9 +38,19 @@ export class BulkUpdateApplicationDto {
   @IsArray()
   ids!: string[];
 
-  @ApiProperty({ enum: STATUSES })
-  @IsIn(STATUSES)
+  @ApiProperty({ enum: APP_MANAGE_STATUSES })
+  @IsIn([...APP_MANAGE_STATUSES])
   status!: ApplicationStatusEnum;
+
+  @ApiPropertyOptional({ description: 'Trofe başvurularında onay için grup id' })
+  @IsOptional()
+  @IsString()
+  groupId?: string | null;
+
+  @ApiPropertyOptional({ description: 'Kapasite doluyken geçici atama' })
+  @IsOptional()
+  @IsBoolean()
+  temporaryGroupAssignment?: boolean;
 }
 
 export class ReviewPaymentDto {

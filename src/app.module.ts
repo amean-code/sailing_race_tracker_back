@@ -21,12 +21,16 @@ import {
   Setting,
   Certificate,
   Trophy,
+  TrophyGroup,
+  Leg,
+  RaceResult,
 } from './entities';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
 import { CoursesModule } from './courses/courses.module';
 import { RacesModule } from './races/races.module';
 import { TrophiesModule } from './trophies/trophies.module';
+import { LegsModule } from './legs/legs.module';
 import { BoatsModule } from './boats/boats.module';
 import { TrackPointsModule } from './track-points/track-points.module';
 import { ApplicationsModule } from './applications/applications.module';
@@ -72,6 +76,9 @@ import { CertificatesModule } from './certificates/certificates.module';
           Setting,
           Certificate,
           Trophy,
+          TrophyGroup,
+          Leg,
+          RaceResult,
         ],
         synchronize: true,
         logging: process.env.NODE_ENV === 'production' ? false : ['query', 'error'],
@@ -85,6 +92,7 @@ import { CertificatesModule } from './certificates/certificates.module';
     CoursesModule,
     RacesModule,
     TrophiesModule,
+    LegsModule,
     BoatsModule,
     TrackPointsModule,
     ApplicationsModule,

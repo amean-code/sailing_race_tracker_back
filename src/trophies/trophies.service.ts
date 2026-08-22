@@ -7,23 +7,23 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Trophy } from '../entities/trophy.entity';
+import { Leg } from '../entities/leg.entity';
 import { Race } from '../entities/race.entity';
 import { RaceApplication } from '../entities/race-application.entity';
-import { Course } from '../entities/course.entity';
-import { User } from '../entities/user.entity';
+import { RaceResult } from '../entities/race-result.entity';
 import {
   ApplicationStatusEnum,
-  NotificationEventEnum,
+  LegKindEnum,
+  RaceResultStatusEnum,
   RaceStatusEnum,
-  RaceTypeEnum,
   TrophyStatusEnum,
   UserRoleEnum,
 } from '../common/constants';
 import { SessionUser } from '../common/decorators';
-import { serializeRace, RaceLike } from '../common/utils/serialize-race';
-import { CreateTrophyDto, CreateTrophyLegDto, UpdateTrophyDto } from './dto/trophy.dto';
-import { NotificationsService } from '../notifications/notifications.service';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { serializeLeg, LegLike } from '../common/utils/serialize-leg';
+import { CreateTrophyDto, CreateTrophyLegDto, CreateTrophyGroupDto, UpdateTrophyDto, UpdateTrophyGroupDto } from './dto/trophy.dto';
+import { LegsService } from '../legs/legs.service';
+import { TrophyGroup } from '../entities/trophy-group.entity';
 
 function normalizeKey(sailNumber: string | null | undefined, email: string): string {
   const sail = (sailNumber || '').trim().toUpperCase();
@@ -33,7 +33,7 @@ function normalizeKey(sailNumber: string | null | undefined, email: string): str
 
 function serializeTrophy(
   trophy: Trophy,
-  legs: ReturnType<typeof serializeRace>[] = [],
+  legs: ReturnType<typeof serializeLeg>[] = [],
 ) {
   return {
     id: trophy.id,
@@ -47,6 +47,7 @@ function serializeTrophy(
     startDate: trophy.startDate ? trophy.startDate.toISOString() : null,
     endDate: trophy.endDate ? trophy.endDate.toISOString() : null,
     plannedLegCount: trophy.plannedLegCount ?? null,
+    maxGroupCount: trophy.maxGroupCount ?? null,
     createdById: trophy.createdById,
     createdAt: trophy.createdAt.toISOString(),
     updatedAt: trophy.updatedAt.toISOString(),
@@ -55,64 +56,83 @@ function serializeTrophy(
   };
 }
 
+function serializeTrophyGroup(group: TrophyGroup, memberCount = 0) {
+  return {
+    id: group.id,
+    trophyId: group.trophyId,
+    name: group.name,
+    sortOrder: group.sortOrder,
+    capacity: group.capacity ?? null,
+    memberCount,
+    isFull:
+      group.capacity != null && memberCount >= group.capacity,
+    createdAt: group.createdAt.toISOString(),
+    updatedAt: group.updatedAt.toISOString(),
+  };
+}
+
 @Injectable()
 export class TrophiesService {
   constructor(
     @InjectRepository(Trophy)
     private readonly trophiesRepo: Repository<Trophy>,
+    @InjectRepository(TrophyGroup)
+    private readonly groupsRepo: Repository<TrophyGroup>,
+    @InjectRepository(Leg)
+    private readonly legsRepo: Repository<Leg>,
     @InjectRepository(Race)
     private readonly racesRepo: Repository<Race>,
     @InjectRepository(RaceApplication)
     private readonly applicationsRepo: Repository<RaceApplication>,
-    @InjectRepository(Course)
-    private readonly coursesRepo: Repository<Course>,
-    @InjectRepository(User)
-    private readonly usersRepo: Repository<User>,
-    private readonly notificationsService: NotificationsService,
-    private readonly eventEmitter: EventEmitter2,
+    @InjectRepository(RaceResult)
+    private readonly resultsRepo: Repository<RaceResult>,
+    private readonly legsService: LegsService,
   ) {}
 
   private assertOwner(trophy: Trophy, user: SessionUser) {
     if (!['ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
       throw new ForbiddenException('Bu işlem için yönetici yetkisi gerekli');
     }
-  }
-
-  private async resolveCommitteeId(committeeId: string): Promise<string> {
-    const referee = await this.usersRepo.findOne({ where: { id: committeeId } });
-    if (!referee || referee.role !== UserRoleEnum.COMMITTEE) {
-      throw new BadRequestException('Geçerli bir hakem seçilmelidir.');
+    if (user.role === UserRoleEnum.ADMIN && trophy.createdById !== user.sub) {
+      throw new ForbiddenException('Bu trofe size ait değil.');
     }
-    return referee.id;
   }
 
-  private async serializeLegs(legs: Race[]) {
+  private async serializeLegs(legs: Leg[]) {
     const sorted = [...legs].sort((a, b) => {
       const ao = a.legOrder ?? Number.MAX_SAFE_INTEGER;
       const bo = b.legOrder ?? Number.MAX_SAFE_INTEGER;
       if (ao !== bo) return ao - bo;
-      return new Date(a.startDate).getTime() - new Date(b.startDate).getTime();
+      return new Date(a.startDate ?? 0).getTime() - new Date(b.startDate ?? 0).getTime();
     });
     return Promise.all(
-      sorted.map(async (race) => {
-        const applicationCount = await this.applicationsRepo.count({ where: { raceId: race.id } });
-        return serializeRace({
-          ...race,
+      sorted.map(async (leg) => {
+        const races = await this.racesRepo.find({
+          where: { legId: leg.id },
+          relations: ['course'],
+          order: { raceOrder: 'ASC', startDate: 'ASC' },
+        });
+        const applicationCount = await this.applicationsRepo.count({
+          where: { legId: leg.id },
+        });
+        return serializeLeg({
+          ...leg,
           applicationCount,
-          trophy: race.trophy
-            ? { id: race.trophy.id, title: race.trophy.title }
-            : race.trophyId
-              ? { id: race.trophyId, title: '' }
+          races,
+          trophy: leg.trophy
+            ? { id: leg.trophy.id, title: leg.trophy.title }
+            : leg.trophyId
+              ? { id: leg.trophyId, title: '' }
               : null,
-        } as RaceLike);
+        } as LegLike);
       }),
     );
   }
 
   private async withLegs(trophy: Trophy) {
-    const legs = await this.racesRepo.find({
+    const legs = await this.legsRepo.find({
       where: { trophyId: trophy.id },
-      relations: ['course', 'trophy'],
+      relations: ['trophy'],
       order: { legOrder: 'ASC', startDate: 'ASC' },
     });
     return serializeTrophy(trophy, await this.serializeLegs(legs));
@@ -120,9 +140,9 @@ export class TrophiesService {
 
   async findAllManage(user: SessionUser) {
     if (user.role === UserRoleEnum.COMMITTEE) {
-      const assignedLegs = await this.racesRepo.find({
+      const assignedLegs = await this.legsRepo.find({
         where: {
-          type: RaceTypeEnum.TROFE_LEG,
+          kind: LegKindEnum.TROFE_LEG,
           assignedCommitteeId: user.sub,
         },
         select: ['trophyId'],
@@ -139,8 +159,15 @@ export class TrophiesService {
         where: { id: In(trophyIds) },
         order: { createdAt: 'DESC' },
       });
-      const results = await Promise.all(trophies.map((t) => this.withLegs(t)));
-      return results;
+      return Promise.all(trophies.map((t) => this.withLegs(t)));
+    }
+
+    if (user.role === UserRoleEnum.ADMIN) {
+      const trophies = await this.trophiesRepo.find({
+        where: { createdById: user.sub },
+        order: { createdAt: 'DESC' },
+      });
+      return Promise.all(trophies.map((t) => this.withLegs(t)));
     }
 
     const trophies = await this.trophiesRepo.find({
@@ -174,16 +201,19 @@ export class TrophiesService {
     if (!trophy) throw new NotFoundException('Trofe bulunamadı');
 
     if (user?.role === UserRoleEnum.COMMITTEE) {
-      const assignedCount = await this.racesRepo.count({
+      const assignedCount = await this.legsRepo.count({
         where: {
           trophyId: id,
           assignedCommitteeId: user.sub,
-          type: RaceTypeEnum.TROFE_LEG,
+          kind: LegKindEnum.TROFE_LEG,
         },
       });
       if (assignedCount === 0) {
         throw new ForbiddenException('Bu trofede size atanmış ayak yok.');
       }
+    }
+    if (user?.role === UserRoleEnum.ADMIN && trophy.createdById !== user.sub) {
+      throw new ForbiddenException('Bu trofe size ait değil.');
     }
 
     return this.withLegs(trophy);
@@ -207,6 +237,7 @@ export class TrophiesService {
       startDate: dto.startDate ? new Date(dto.startDate) : null,
       endDate: dto.endDate ? new Date(dto.endDate) : null,
       plannedLegCount: dto.plannedLegCount ?? null,
+      maxGroupCount: dto.maxGroupCount ?? null,
       createdById,
       assignedCommitteeId: null,
     });
@@ -242,7 +273,7 @@ export class TrophiesService {
     }
     if (dto.plannedLegCount !== undefined) {
       if (dto.plannedLegCount != null) {
-        const currentLegs = await this.racesRepo.count({ where: { trophyId: id } });
+        const currentLegs = await this.legsRepo.count({ where: { trophyId: id } });
         if (dto.plannedLegCount < currentLegs) {
           throw new BadRequestException(
             `Planlanan ayak sayısı mevcut ayak sayısından (${currentLegs}) küçük olamaz.`,
@@ -250,6 +281,17 @@ export class TrophiesService {
         }
       }
       trophy.plannedLegCount = dto.plannedLegCount ?? null;
+    }
+    if (dto.maxGroupCount !== undefined) {
+      if (dto.maxGroupCount != null) {
+        const currentGroups = await this.groupsRepo.count({ where: { trophyId: id } });
+        if (dto.maxGroupCount < currentGroups) {
+          throw new BadRequestException(
+            `Maksimum grup sayısı mevcut grup sayısından (${currentGroups}) küçük olamaz.`,
+          );
+        }
+      }
+      trophy.maxGroupCount = dto.maxGroupCount ?? null;
     }
 
     await this.trophiesRepo.save(trophy);
@@ -261,10 +303,10 @@ export class TrophiesService {
     if (!trophy) throw new NotFoundException('Trofe bulunamadı');
     this.assertOwner(trophy, user);
 
-    const legCount = await this.racesRepo.count({ where: { trophyId: id } });
+    const legCount = await this.legsRepo.count({ where: { trophyId: id } });
     if (legCount > 0) {
       throw new BadRequestException(
-        'Trofe silinemez: önce tüm ayak yarışlarını silin.',
+        'Trofe silinemez: önce tüm ayakları silin.',
       );
     }
     await this.trophiesRepo.remove(trophy);
@@ -272,84 +314,161 @@ export class TrophiesService {
   }
 
   async addLeg(trophyId: string, dto: CreateTrophyLegDto, user: SessionUser) {
+    return this.legsService.createTrophyLeg(trophyId, dto, user);
+  }
+
+  private async assertCanViewTrophy(trophy: Trophy, user: SessionUser) {
+    if (user.role === UserRoleEnum.SUPER_ADMIN) return;
+    if (user.role === UserRoleEnum.ADMIN) {
+      if (trophy.createdById !== user.sub) {
+        throw new ForbiddenException('Bu trofe size ait değil.');
+      }
+      return;
+    }
+    if (user.role === UserRoleEnum.COMMITTEE) {
+      const assignedCount = await this.legsRepo.count({
+        where: {
+          trophyId: trophy.id,
+          assignedCommitteeId: user.sub,
+          kind: LegKindEnum.TROFE_LEG,
+        },
+      });
+      if (assignedCount === 0) {
+        throw new ForbiddenException('Bu trofede size atanmış ayak yok.');
+      }
+      return;
+    }
+    throw new ForbiddenException('Bu işlem için yetkiniz yok');
+  }
+
+  private async groupMemberCount(groupId: string): Promise<number> {
+    return this.applicationsRepo.count({
+      where: {
+        groupId,
+        status: In([ApplicationStatusEnum.APPROVED, ApplicationStatusEnum.CHECKED_IN]),
+      },
+    });
+  }
+
+  async listGroups(trophyId: string, user: SessionUser) {
+    const trophy = await this.trophiesRepo.findOne({ where: { id: trophyId } });
+    if (!trophy) throw new NotFoundException('Trofe bulunamadı');
+    await this.assertCanViewTrophy(trophy, user);
+
+    const groups = await this.groupsRepo.find({
+      where: { trophyId },
+      order: { sortOrder: 'ASC', createdAt: 'ASC' },
+    });
+
+    return Promise.all(
+      groups.map(async (g) => serializeTrophyGroup(g, await this.groupMemberCount(g.id))),
+    );
+  }
+
+  async createGroup(trophyId: string, dto: CreateTrophyGroupDto, user: SessionUser) {
     const trophy = await this.trophiesRepo.findOne({ where: { id: trophyId } });
     if (!trophy) throw new NotFoundException('Trofe bulunamadı');
     this.assertOwner(trophy, user);
 
-    const existingCount = await this.racesRepo.count({ where: { trophyId } });
-    if (trophy.plannedLegCount != null && existingCount >= trophy.plannedLegCount) {
-      trophy.plannedLegCount = existingCount + 1;
-      await this.trophiesRepo.save(trophy);
-    } else if (trophy.plannedLegCount == null) {
-      trophy.plannedLegCount = existingCount + 1;
-      await this.trophiesRepo.save(trophy);
+    const existingCount = await this.groupsRepo.count({ where: { trophyId } });
+    if (trophy.maxGroupCount != null && existingCount >= trophy.maxGroupCount) {
+      throw new BadRequestException(
+        `Bu trofe için en fazla ${trophy.maxGroupCount} grup oluşturulabilir.`,
+      );
     }
 
-    const assignedCommitteeId = await this.resolveCommitteeId(dto.assignedCommitteeId);
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException('Grup adı gerekli');
 
-    if (dto.courseId) {
-      const course = await this.coursesRepo.findOne({ where: { id: dto.courseId } });
-      if (!course) throw new NotFoundException('Seçilen parkur bulunamadı.');
+    const duplicate = await this.groupsRepo.findOne({
+      where: { trophyId, name },
+    });
+    if (duplicate) {
+      throw new BadRequestException('Bu isimde bir grup zaten var.');
     }
 
-    let legOrder = dto.legOrder;
-    if (legOrder == null) {
-      const existing = await this.racesRepo.find({
-        where: { trophyId },
-        select: ['legOrder'],
-      });
-      const maxOrder = existing.reduce((max, r) => Math.max(max, r.legOrder ?? 0), 0);
-      legOrder = maxOrder + 1;
-    }
+    const maxSort = await this.groupsRepo
+      .createQueryBuilder('g')
+      .select('MAX(g.sortOrder)', 'max')
+      .where('g.trophyId = :trophyId', { trophyId })
+      .getRawOne<{ max: string | null }>();
+    const nextSort =
+      dto.sortOrder ??
+      (maxSort?.max != null ? Number(maxSort.max) + 1 : 0);
 
-    const race = this.racesRepo.create({
-      title: dto.title,
-      description: dto.description ?? null,
-      location: dto.location ?? trophy.location,
-      venue: dto.venue ?? trophy.venue,
-      startDate: new Date(dto.startDate),
-      endDate: new Date(dto.endDate),
-      registrationDeadline: new Date(dto.registrationDeadline),
-      boatClass: dto.boatClass ?? trophy.boatClass,
-      capacity: dto.capacity ?? 30,
-      status: dto.status ?? RaceStatusEnum.OPEN,
-      organizer: dto.organizer ?? trophy.organizer,
-      courseId: dto.courseId ?? null,
-      courseIds: dto.courseIds ?? [],
-      raceState: dto.raceState ?? {},
-      createdById: user.sub,
-      assignedCommitteeId,
-      type: RaceTypeEnum.TROFE_LEG,
+    const group = this.groupsRepo.create({
       trophyId,
-      legOrder,
+      name,
+      capacity: dto.capacity ?? null,
+      sortOrder: Number.isFinite(nextSort) ? nextSort : existingCount,
     });
+    const saved = await this.groupsRepo.save(group);
+    return serializeTrophyGroup(saved, 0);
+  }
 
-    const saved = await this.racesRepo.save(race);
-    this.notificationsService.dispatchAsync(NotificationEventEnum.RACE_CREATED, {
-      raceId: saved.id,
-      raceTitle: saved.title,
-      raceLocation: saved.location,
-      raceStatus: saved.status,
-    });
-    this.eventEmitter.emit('race.created', {
-      raceId: saved.id,
-      userId: user.sub,
-      description: `Trofe ayağı oluşturuldu: ${trophy.title} / ${saved.title}`,
-    });
+  async updateGroup(
+    trophyId: string,
+    groupId: string,
+    dto: UpdateTrophyGroupDto,
+    user: SessionUser,
+  ) {
+    const trophy = await this.trophiesRepo.findOne({ where: { id: trophyId } });
+    if (!trophy) throw new NotFoundException('Trofe bulunamadı');
+    this.assertOwner(trophy, user);
 
-    const applicationCount = await this.applicationsRepo.count({ where: { raceId: saved.id } });
-    return serializeRace({
-      ...saved,
-      applicationCount,
-      trophy: { id: trophy.id, title: trophy.title },
-    } as RaceLike);
+    const group = await this.groupsRepo.findOne({
+      where: { id: groupId, trophyId },
+    });
+    if (!group) throw new NotFoundException('Grup bulunamadı');
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('Grup adı gerekli');
+      const duplicate = await this.groupsRepo.findOne({
+        where: { trophyId, name },
+      });
+      if (duplicate && duplicate.id !== group.id) {
+        throw new BadRequestException('Bu isimde bir grup zaten var.');
+      }
+      group.name = name;
+    }
+    if (dto.capacity !== undefined) {
+      group.capacity = dto.capacity ?? null;
+    }
+    if (dto.sortOrder !== undefined) {
+      group.sortOrder = dto.sortOrder;
+    }
+
+    const saved = await this.groupsRepo.save(group);
+    return serializeTrophyGroup(saved, await this.groupMemberCount(saved.id));
+  }
+
+  async removeGroup(trophyId: string, groupId: string, user: SessionUser) {
+    const trophy = await this.trophiesRepo.findOne({ where: { id: trophyId } });
+    if (!trophy) throw new NotFoundException('Trofe bulunamadı');
+    this.assertOwner(trophy, user);
+
+    const group = await this.groupsRepo.findOne({
+      where: { id: groupId, trophyId },
+    });
+    if (!group) throw new NotFoundException('Grup bulunamadı');
+
+    const memberCount = await this.groupMemberCount(groupId);
+    if (memberCount > 0) {
+      throw new BadRequestException(
+        'Gruba atanmış onaylı başvuru varken silinemez. Önce başvuruları başka gruba taşıyın veya geri çekin.',
+      );
+    }
+
+    await this.groupsRepo.remove(group);
+    return { ok: true };
   }
 
   async getStandings(trophyId: string) {
     const trophy = await this.trophiesRepo.findOne({ where: { id: trophyId } });
     if (!trophy) throw new NotFoundException('Trofe bulunamadı');
 
-    const legs = await this.racesRepo.find({
+    const legs = await this.legsRepo.find({
       where: { trophyId },
       order: { legOrder: 'ASC', startDate: 'ASC' },
     });
@@ -358,20 +477,38 @@ export class TrophiesService {
       return {
         trophy: { id: trophy.id, title: trophy.title },
         legs: [],
+        races: [],
         standings: [],
       };
     }
 
     const legIds = legs.map((l) => l.id);
-    const applications = await this.applicationsRepo.find({
-      where: { raceId: In(legIds) },
+    const races = await this.racesRepo.find({
+      where: { legId: In(legIds) },
+      order: { raceOrder: 'ASC', startDate: 'ASC' },
     });
 
-    const appsByRace = new Map<string, RaceApplication[]>();
+    const applications = await this.applicationsRepo.find({
+      where: { legId: In(legIds) },
+    });
+
+    const raceIds = races.map((r) => r.id);
+    const results =
+      raceIds.length === 0
+        ? []
+        : await this.resultsRepo.find({ where: { raceId: In(raceIds) } });
+
+    const resultByAppRace = new Map<string, RaceResult>();
+    for (const result of results) {
+      resultByAppRace.set(`${result.applicationId}:${result.raceId}`, result);
+    }
+
+    const appsByLeg = new Map<string, RaceApplication[]>();
     for (const app of applications) {
-      const list = appsByRace.get(app.raceId) ?? [];
+      if (!app.legId) continue;
+      const list = appsByLeg.get(app.legId) ?? [];
       list.push(app);
-      appsByRace.set(app.raceId, list);
+      appsByLeg.set(app.legId, list);
     }
 
     type Competitor = {
@@ -381,8 +518,8 @@ export class TrophiesService {
       name: string;
       email: string;
       club: string | null;
-      legPoints: Record<string, number | null>;
-      legResults: Record<
+      racePoints: Record<string, number | null>;
+      raceResults: Record<
         string,
         { points: number; finishPosition: number | null; status: string; scored: boolean }
       >;
@@ -403,8 +540,8 @@ export class TrophiesService {
           name: app.name,
           email: app.email,
           club: app.club,
-          legPoints: {},
-          legResults: {},
+          racePoints: {},
+          raceResults: {},
           totalPoints: 0,
           racesScored: 0,
         };
@@ -418,78 +555,72 @@ export class TrophiesService {
       return c;
     };
 
-    for (const leg of legs) {
-      const apps = appsByRace.get(leg.id) ?? [];
-      const fleetSize =
-        apps.find((a) => a.fleetSize != null)?.fleetSize ??
-        apps.filter((a) =>
-          ![ApplicationStatusEnum.WITHDRAWN].includes(a.status as ApplicationStatusEnum),
-        ).length;
-      const dnsPoints = Math.max(fleetSize, 1) + 1;
-      const isFinished = leg.status === RaceStatusEnum.FINISHED;
+    for (const race of races) {
+      const legApps = appsByLeg.get(race.legId ?? '') ?? [];
+      const fleetSize = Math.max(
+        legApps.filter(
+          (a) =>
+            ![ApplicationStatusEnum.WITHDRAWN, ApplicationStatusEnum.PENDING].includes(
+              a.status as ApplicationStatusEnum,
+            ),
+        ).length,
+        1,
+      );
+      const dnsPoints = fleetSize + 1;
+      const isFinished = race.status === RaceStatusEnum.FINISHED;
 
-      for (const app of apps) {
+      for (const app of legApps) {
         if (app.status === ApplicationStatusEnum.WITHDRAWN) continue;
+        if (app.status === ApplicationStatusEnum.PENDING) continue;
         const c = ensureCompetitor(app);
+        const result = resultByAppRace.get(`${app.id}:${race.id}`);
         let points: number;
         let scored = false;
 
-        if (app.finishPosition != null) {
-          points = app.finishPosition;
+        if (result?.finishPosition != null) {
+          points = result.finishPosition;
           scored = true;
         } else if (
-          app.status === ApplicationStatusEnum.DNS ||
-          app.status === ApplicationStatusEnum.DNF ||
-          app.status === ApplicationStatusEnum.DSQ ||
+          result?.status === RaceResultStatusEnum.DNS ||
+          result?.status === RaceResultStatusEnum.DNF ||
+          result?.status === RaceResultStatusEnum.DSQ ||
           isFinished
         ) {
-          points = dnsPoints;
-          scored =
-            isFinished ||
-            app.status === ApplicationStatusEnum.DNS ||
-            app.status === ApplicationStatusEnum.DNF ||
-            app.status === ApplicationStatusEnum.DSQ;
+          points = result?.fleetSize != null ? result.fleetSize + 1 : dnsPoints;
+          scored = true;
         } else {
           points = 0;
           scored = false;
         }
 
-        c.legPoints[leg.id] = scored ? points : null;
-        c.legResults[leg.id] = {
+        c.racePoints[race.id] = scored ? points : null;
+        c.raceResults[race.id] = {
           points: scored ? points : 0,
-          finishPosition: app.finishPosition,
-          status: String(app.status),
+          finishPosition: result?.finishPosition ?? null,
+          status: String(result?.status ?? app.status),
           scored,
         };
       }
-    }
 
-    // For finished legs where a competitor did not enter: DNS points
-    for (const leg of legs) {
-      if (leg.status !== RaceStatusEnum.FINISHED) continue;
-      const apps = appsByRace.get(leg.id) ?? [];
-      const fleetSize =
-        apps.find((a) => a.fleetSize != null)?.fleetSize ??
-        Math.max(apps.length, competitors.size, 1);
-      const dnsPoints = fleetSize + 1;
-
-      for (const c of competitors.values()) {
-        if (c.legResults[leg.id]) continue;
-        c.legPoints[leg.id] = dnsPoints;
-        c.legResults[leg.id] = {
-          points: dnsPoints,
-          finishPosition: null,
-          status: ApplicationStatusEnum.DNS,
-          scored: true,
-        };
+      if (isFinished) {
+        for (const c of competitors.values()) {
+          if (c.raceResults[race.id]) continue;
+          c.racePoints[race.id] = dnsPoints;
+          c.raceResults[race.id] = {
+            points: dnsPoints,
+            finishPosition: null,
+            status: RaceResultStatusEnum.DNS,
+            scored: true,
+          };
+        }
       }
     }
 
     const standings = Array.from(competitors.values()).map((c) => {
       let total = 0;
       let racesScored = 0;
-      for (const leg of legs) {
-        const result = c.legResults[leg.id];
+      for (const race of races) {
+        const result = c.raceResults[race.id];
         if (result?.scored) {
           total += result.points;
           racesScored += 1;
@@ -503,10 +634,11 @@ export class TrophiesService {
         club: c.club,
         totalPoints: total,
         racesScored,
-        legPoints: Object.fromEntries(
-          legs.map((leg) => [leg.id, c.legPoints[leg.id] ?? null]),
-        ),
-        legResults: c.legResults,
+        racePoints: Object.fromEntries(races.map((race) => [race.id, c.racePoints[race.id] ?? null])),
+        raceResults: c.raceResults,
+        // Backward-compatible aliases for UI still keyed by "leg"
+        legPoints: Object.fromEntries(races.map((race) => [race.id, c.racePoints[race.id] ?? null])),
+        legResults: c.raceResults,
       };
     });
 
@@ -521,14 +653,22 @@ export class TrophiesService {
       scoring: {
         system: 'low_point',
         description:
-          'Her ayakta bitiş pozisyonu puan olarak sayılır. DNS/DNF/DSQ ve katılmayanlar için filo sayısı + 1. En düşük toplam üsttedir.',
+          'Her yarışta bitiş pozisyonu puan olarak sayılır. DNS/DNF/DSQ ve katılmayanlar için filo sayısı + 1. En düşük toplam üsttedir.',
       },
       legs: legs.map((leg) => ({
         id: leg.id,
         title: leg.title,
         legOrder: leg.legOrder,
         status: String(leg.status).toLowerCase(),
-        startDate: leg.startDate.toISOString(),
+        startDate: leg.startDate ? leg.startDate.toISOString() : null,
+      })),
+      races: races.map((race) => ({
+        id: race.id,
+        legId: race.legId,
+        title: race.title,
+        raceOrder: race.raceOrder,
+        status: String(race.status).toLowerCase(),
+        startDate: race.startDate ? race.startDate.toISOString() : null,
       })),
       standings: standings.map((row, index) => ({
         rank: index + 1,

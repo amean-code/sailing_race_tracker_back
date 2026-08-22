@@ -16,6 +16,9 @@ import {
   WebhookSubscription,
   AuditLog,
   Trophy,
+  TrophyGroup,
+  Leg,
+  RaceResult,
 } from '../entities';
 
 export const AppDataSource = new DataSource({
@@ -36,6 +39,9 @@ export const AppDataSource = new DataSource({
     WebhookSubscription,
     AuditLog,
     Trophy,
+    TrophyGroup,
+    Leg,
+    RaceResult,
   ],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: true,

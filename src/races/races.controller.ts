@@ -61,16 +61,16 @@ export class RacesController {
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yarış katılımcıları (başvuru + tekne + konum)' })
-  async getCompetitors(@Param('id') id: string) {
-    return this.raceFleetService.getCompetitors(id);
+  async getCompetitors(@Param('id') id: string, @CurrentUser() user: SessionUser) {
+    return this.raceFleetService.getCompetitors(id, user);
   }
 
   @Get(':id/live-trails')
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Canlı takip için geçmiş rotalar (startı geçenler)' })
-  async getLiveTrails(@Param('id') id: string) {
-    const trails = await this.racesService.getLiveTrails(id);
+  async getLiveTrails(@Param('id') id: string, @CurrentUser() user: SessionUser) {
+    const trails = await this.racesService.getLiveTrails(id, user);
     return { trails };
   }
 
@@ -78,8 +78,8 @@ export class RacesController {
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Başvuruyu check-in yap ve tekne oluştur' })
-  async checkIn(@Param('id') id: string, @Body() dto: CheckInDto) {
-    return this.raceFleetService.checkIn(id, dto.applicationId);
+  async checkIn(@Param('id') id: string, @Body() dto: CheckInDto, @CurrentUser() user: SessionUser) {
+    return this.raceFleetService.checkIn(id, dto.applicationId, user);
   }
 
   @Get(':id')
@@ -105,7 +105,7 @@ export class RacesController {
   @Roles('ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Yarışı klonla (yalnızca admin)' })
   async clone(@Param('id') id: string, @CurrentUser() user: SessionUser) {
-    const race = await this.racesService.cloneRace(id, user.sub);
+    const race = await this.racesService.cloneRace(id, user.sub, user);
     return { race };
   }
 

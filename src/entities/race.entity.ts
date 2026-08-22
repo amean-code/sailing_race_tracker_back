@@ -12,10 +12,10 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { RaceStatusEnum, RaceTypeEnum } from '../common/constants';
 import { Course } from './course.entity';
-import { RaceApplication } from './race-application.entity';
 import { Boat } from './boat.entity';
 import { TrackPoint } from './track-point.entity';
-import { Trophy } from './trophy.entity';
+import { Leg } from './leg.entity';
+import { RaceResult } from './race-result.entity';
 
 @Entity('races')
 export class Race {
@@ -28,46 +28,25 @@ export class Race {
   @Column({ type: 'text', nullable: true })
   description!: string | null;
 
-  @Column({ default: '' })
-  location!: string;
+  @Column({ name: 'start_date', type: 'timestamp', nullable: true })
+  startDate!: Date | null;
 
-  @Column({ type: 'text', nullable: true })
-  venue!: string | null;
-
-  @Column({ name: 'start_date', type: 'timestamp' })
-  startDate!: Date;
-
-  @Column({ name: 'end_date', type: 'timestamp' })
-  endDate!: Date;
-
-  @Column({ name: 'registration_deadline', type: 'timestamp' })
-  registrationDeadline!: Date;
-
-  @Column({ name: 'boat_class', type: 'text', nullable: true })
-  boatClass!: string | null;
-
-  @Column({ default: 30 })
-  capacity!: number;
-
-  @Column({ type: 'enum', enum: RaceStatusEnum, enumName: 'RaceStatus', default: RaceStatusEnum.OPEN })
-  status!: RaceStatusEnum;
+  @Column({ name: 'end_date', type: 'timestamp', nullable: true })
+  endDate!: Date | null;
 
   @Column({
     type: 'enum',
-    enum: RaceTypeEnum,
-    enumName: 'RaceType',
-    default: RaceTypeEnum.REGATA,
+    enum: RaceStatusEnum,
+    enumName: 'RaceStatus',
+    default: RaceStatusEnum.OPEN,
   })
-  type!: RaceTypeEnum;
+  status!: RaceStatusEnum;
 
-  @Column({ name: 'trophy_id', type: 'text', nullable: true })
-  trophyId!: string | null;
+  @Column({ name: 'leg_id', type: 'text', nullable: true })
+  legId!: string | null;
 
-  @Column({ name: 'leg_order', type: 'int', nullable: true })
-  legOrder!: number | null;
-
-  @Column({ type: 'text', nullable: true })
-  organizer!: string | null;
+  @Column({ name: 'race_order', type: 'int', nullable: true })
+  raceOrder!: number | null;
 
   @Column({ name: 'course_id', type: 'text', nullable: true })
   courseId!: string | null;
@@ -84,8 +63,44 @@ export class Race {
   @Column({ name: 'created_by_id', type: 'text', nullable: true })
   createdById!: string | null;
 
+  /**
+   * Legacy columns kept so synchronize does not drop them before bootstrap
+   * migrates existing rows into legs. New code must not write these.
+   */
+  @Column({ type: 'varchar', default: '', nullable: true })
+  location!: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  venue!: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  organizer!: string | null;
+
+  @Column({ name: 'boat_class', type: 'text', nullable: true })
+  boatClass!: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  capacity!: number | null;
+
+  @Column({ name: 'registration_deadline', type: 'timestamp', nullable: true })
+  registrationDeadline!: Date | null;
+
   @Column({ name: 'assigned_committee_id', type: 'text', nullable: true })
   assignedCommitteeId!: string | null;
+
+  @Column({
+    type: 'enum',
+    enum: RaceTypeEnum,
+    enumName: 'RaceType',
+    nullable: true,
+  })
+  type!: RaceTypeEnum | null;
+
+  @Column({ name: 'trophy_id', type: 'text', nullable: true })
+  trophyId!: string | null;
+
+  @Column({ name: 'leg_order', type: 'int', nullable: true })
+  legOrder!: number | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
@@ -97,18 +112,18 @@ export class Race {
   @JoinColumn({ name: 'course_id' })
   course!: Course | null;
 
-  @ManyToOne(() => Trophy, (trophy) => trophy.legs, { onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'trophy_id' })
-  trophy!: Trophy | null;
-
-  @OneToMany(() => RaceApplication, (app) => app.race)
-  applications!: RaceApplication[];
+  @ManyToOne(() => Leg, (leg) => leg.races, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'leg_id' })
+  leg!: Leg | null;
 
   @OneToMany(() => Boat, (boat) => boat.race)
   boats!: Boat[];
 
   @OneToMany(() => TrackPoint, (tp) => tp.race)
   trackPoints!: TrackPoint[];
+
+  @OneToMany(() => RaceResult, (result) => result.race)
+  results!: RaceResult[];
 
   @BeforeInsert()
   generateId() {

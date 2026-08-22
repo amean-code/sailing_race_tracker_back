@@ -1,4 +1,4 @@
-import { RaceStatusEnum, RaceTypeEnum } from '../constants';
+import { RaceStatusEnum } from '../constants';
 
 export type CourseLike = {
   id: string;
@@ -8,28 +8,23 @@ export type CourseLike = {
   updatedAt: Date;
 };
 
-export type TrophySummaryLike = {
+export type LegSummaryLike = {
   id: string;
   title: string;
+  kind?: string;
+  trophyId?: string | null;
 };
 
 export type RaceLike = {
   id: string;
   title: string;
   description: string | null;
-  location: string;
-  venue: string | null;
-  startDate: Date;
-  endDate: Date;
-  registrationDeadline: Date;
-  boatClass: string | null;
-  capacity: number;
+  startDate: Date | null;
+  endDate: Date | null;
   status: RaceStatusEnum | string;
-  type?: RaceTypeEnum | string;
-  trophyId?: string | null;
-  legOrder?: number | null;
-  trophy?: TrophySummaryLike | null;
-  organizer: string | null;
+  legId?: string | null;
+  raceOrder?: number | null;
+  leg?: LegSummaryLike | null;
   courseId: string | null;
   courseIds?: string[];
   course?: CourseLike | null;
@@ -37,9 +32,19 @@ export type RaceLike = {
   raceState?: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
-  applicationCount?: number;
   createdById?: string | null;
+  location?: string | null;
+  venue?: string | null;
+  registrationDeadline?: Date | null;
+  boatClass?: string | null;
+  capacity?: number | null;
+  organizer?: string | null;
   assignedCommitteeId?: string | null;
+  applicationCount?: number;
+  trophyId?: string | null;
+  legOrder?: number | null;
+  type?: string | null;
+  trophy?: { id: string; title: string } | null;
 };
 
 export type PublicRegistrationStatus =
@@ -54,11 +59,6 @@ function normalizeRaceStatus(status: RaceStatusEnum | string): RaceStatusEnum {
   return String(status).toUpperCase() as RaceStatusEnum;
 }
 
-function normalizeRaceType(type?: RaceTypeEnum | string | null): RaceTypeEnum {
-  const value = String(type || RaceTypeEnum.REGATA).toUpperCase();
-  return value === RaceTypeEnum.TROFE_LEG ? RaceTypeEnum.TROFE_LEG : RaceTypeEnum.REGATA;
-}
-
 function toDate(value: Date | string): Date {
   return value instanceof Date ? value : new Date(value);
 }
@@ -69,12 +69,13 @@ export function computeRegistrationState(
   now = new Date(),
 ) {
   const status = normalizeRaceStatus(race.status);
-  const deadline = toDate(race.registrationDeadline);
-  const spotsLeft = Math.max(0, race.capacity - applicationCount);
+  const deadline = race.registrationDeadline ? toDate(race.registrationDeadline) : null;
+  const capacity = race.capacity ?? 30;
+  const spotsLeft = Math.max(0, capacity - applicationCount);
   const registrationOpen =
     status === RaceStatusEnum.OPEN &&
-    deadline > now &&
-    spotsLeft > 0;
+    spotsLeft > 0 &&
+    (deadline === null || deadline > now);
 
   let registrationStatus: PublicRegistrationStatus;
   if (status === RaceStatusEnum.IN_PROGRESS) {
@@ -85,7 +86,7 @@ export function computeRegistrationState(
     registrationStatus = 'closed';
   } else if (spotsLeft <= 0) {
     registrationStatus = 'full';
-  } else if (status === RaceStatusEnum.OPEN && deadline <= now) {
+  } else if (status === RaceStatusEnum.OPEN && deadline !== null && deadline <= now) {
     registrationStatus = 'deadline_passed';
   } else if (registrationOpen) {
     registrationStatus = 'open';
@@ -112,47 +113,30 @@ function serializeCourse(course: CourseLike) {
 }
 
 export function serializeRace(race: RaceLike) {
-  const appliedCount = race.applicationCount ?? 0;
-  const {
-    spotsLeft,
-    registrationOpen,
-    registrationStatus,
-  } = computeRegistrationState(race, appliedCount);
-  const type = normalizeRaceType(race.type);
-
   return {
     id: race.id,
     title: race.title,
     description: race.description,
-    location: race.location,
-    venue: race.venue,
-    startDate: toDate(race.startDate).toISOString(),
-    endDate: toDate(race.endDate).toISOString(),
-    registrationDeadline: toDate(race.registrationDeadline).toISOString(),
-    boatClass: race.boatClass,
-    capacity: race.capacity,
+    startDate: race.startDate ? toDate(race.startDate).toISOString() : null,
+    endDate: race.endDate ? toDate(race.endDate).toISOString() : null,
     status: normalizeRaceStatus(race.status).toLowerCase(),
-    type: type.toLowerCase(),
-    trophyId: race.trophyId ?? null,
-    legOrder: race.legOrder ?? null,
-    trophy: race.trophy
-      ? { id: race.trophy.id, title: race.trophy.title }
-      : race.trophyId
-        ? { id: race.trophyId, title: '' }
-        : null,
-    organizer: race.organizer,
+    legId: race.legId ?? null,
+    raceOrder: race.raceOrder ?? null,
+    leg: race.leg
+      ? {
+          id: race.leg.id,
+          title: race.leg.title,
+          kind: race.leg.kind ?? null,
+          trophyId: race.leg.trophyId ?? null,
+        }
+      : null,
     courseId: race.courseId,
-    courseIds: (race as any).courseIds ?? [],
+    courseIds: race.courseIds ?? [],
     course: race.course ? serializeCourse(race.course) : null,
     courseSnapshot: race.courseSnapshot ?? null,
     raceState: race.raceState ?? {},
-    appliedCount,
-    spotsLeft,
-    registrationOpen,
-    registrationStatus,
     createdAt: toDate(race.createdAt).toISOString(),
     updatedAt: toDate(race.updatedAt).toISOString(),
     createdById: race.createdById ?? null,
-    assignedCommitteeId: race.assignedCommitteeId ?? null,
   };
 }
