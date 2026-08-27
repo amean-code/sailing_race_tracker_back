@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Course } from '../entities/course.entity';
 import { CreateCourseDto, UpdateCourseDto } from './dto/course.dto';
 import { CourseStatusEnum, UserRoleEnum, RaceStatusEnum } from '../common/constants';
@@ -72,10 +72,29 @@ export class CoursesService {
     return courses.map((c) => this.serialize(c));
   }
 
+  /**
+   * Courses that a committee member may attach to an assigned race. This is
+   * deliberately separate from `findAll`, which remains limited to the
+   * committee member's own courses for course management.
+   */
+  async findAvailableForRace() {
+    const courses = await this.coursesRepo.find({
+      where: { status: In([CourseStatusEnum.APPROVED, CourseStatusEnum.ACTIVE]) },
+      relations: ['createdBy', 'races'],
+      order: { createdAt: 'DESC' },
+    });
+    return courses.map((c) => this.serialize(c));
+  }
+
   async findOne(id: string, user?: SessionUser) {
-    const where: any = { id };
+    let where: any = { id };
     if (user?.role === UserRoleEnum.COMMITTEE) {
-      where.createdById = user.sub;
+      // A referee may load a shared, race-assignable course in the editor,
+      // while write operations remain limited to courses they own.
+      where = [
+        { id, createdById: user.sub },
+        { id, status: In([CourseStatusEnum.APPROVED, CourseStatusEnum.ACTIVE]) },
+      ];
     }
 
     const course = await this.coursesRepo.findOne({

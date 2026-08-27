@@ -71,6 +71,25 @@ function serializeTrophyGroup(group: TrophyGroup, memberCount = 0) {
   };
 }
 
+type TrophyMeta = {
+  location: string | null | undefined;
+  venue: string | null | undefined;
+  organizer: string | null | undefined;
+  boatClass: string | null | undefined;
+};
+
+function normMeta(value: string | null | undefined) {
+  return (value ?? '').trim();
+}
+
+/** True when the child still mirrors the parent value (inherited). */
+function inheritsMetaField(
+  child: string | null | undefined,
+  parent: string | null | undefined,
+) {
+  return normMeta(child) === normMeta(parent);
+}
+
 @Injectable()
 export class TrophiesService {
   constructor(
@@ -88,6 +107,73 @@ export class TrophiesService {
     private readonly resultsRepo: Repository<RaceResult>,
     private readonly legsService: LegsService,
   ) {}
+
+  /**
+   * When trophy şehir/marina/organizatör/sınıf change, push into legs (and
+   * races) that were still using the previous trophy values.
+   */
+  private async propagateTrophyMetaToChildren(
+    trophyId: string,
+    prev: TrophyMeta,
+    next: TrophyMeta,
+  ) {
+    const fields = ['location', 'venue', 'organizer', 'boatClass'] as const;
+    const changed = fields.filter((key) => normMeta(prev[key]) !== normMeta(next[key]));
+    if (changed.length === 0) return;
+
+    const legs = await this.legsRepo.find({ where: { trophyId } });
+    if (legs.length === 0) return;
+
+    const dirtyLegs: Leg[] = [];
+    for (const leg of legs) {
+      let touched = false;
+      for (const key of changed) {
+        if (!inheritsMetaField(leg[key], prev[key])) continue;
+        const value = next[key];
+        if (key === 'location') {
+          leg.location = normMeta(value);
+        } else if (key === 'venue') {
+          leg.venue = normMeta(value) || null;
+        } else if (key === 'organizer') {
+          leg.organizer = normMeta(value) || null;
+        } else {
+          leg.boatClass = normMeta(value) || null;
+        }
+        touched = true;
+      }
+      if (touched) dirtyLegs.push(leg);
+    }
+    if (dirtyLegs.length > 0) {
+      await this.legsRepo.save(dirtyLegs);
+    }
+
+    const legIds = legs.map((l) => l.id);
+    const races = await this.racesRepo.find({ where: { legId: In(legIds) } });
+    const dirtyRaces: Race[] = [];
+    for (const race of races) {
+      let touched = false;
+      for (const key of changed) {
+        // Only rewrite denormalized race fields that still matched the old trophy.
+        if (race[key] == null || race[key] === '') continue;
+        if (!inheritsMetaField(race[key], prev[key])) continue;
+        const value = next[key];
+        if (key === 'location') {
+          race.location = normMeta(value);
+        } else if (key === 'venue') {
+          race.venue = normMeta(value) || null;
+        } else if (key === 'organizer') {
+          race.organizer = normMeta(value) || null;
+        } else {
+          race.boatClass = normMeta(value) || null;
+        }
+        touched = true;
+      }
+      if (touched) dirtyRaces.push(race);
+    }
+    if (dirtyRaces.length > 0) {
+      await this.racesRepo.save(dirtyRaces);
+    }
+  }
 
   private assertOwner(trophy: Trophy, user: SessionUser) {
     if (!['ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
@@ -258,6 +344,13 @@ export class TrophiesService {
     if (!trophy) throw new NotFoundException('Trofe bulunamadı');
     this.assertOwner(trophy, user);
 
+    const prevMeta: TrophyMeta = {
+      location: trophy.location,
+      venue: trophy.venue,
+      organizer: trophy.organizer,
+      boatClass: trophy.boatClass,
+    };
+
     if (dto.title !== undefined) trophy.title = dto.title;
     if (dto.description !== undefined) trophy.description = dto.description ?? null;
     if (dto.location !== undefined) trophy.location = dto.location;
@@ -295,19 +388,28 @@ export class TrophiesService {
     }
 
     await this.trophiesRepo.save(trophy);
+
+    await this.propagateTrophyMetaToChildren(id, prevMeta, {
+      location: trophy.location,
+      venue: trophy.venue,
+      organizer: trophy.organizer,
+      boatClass: trophy.boatClass,
+    });
+
     return this.withLegs(trophy);
   }
 
   async remove(id: string, user: SessionUser) {
+    if (user.role !== UserRoleEnum.SUPER_ADMIN) {
+      throw new ForbiddenException('Trofe silme yalnızca süper yönetici tarafından yapılabilir');
+    }
     const trophy = await this.trophiesRepo.findOne({ where: { id } });
     if (!trophy) throw new NotFoundException('Trofe bulunamadı');
-    this.assertOwner(trophy, user);
 
-    const legCount = await this.legsRepo.count({ where: { trophyId: id } });
-    if (legCount > 0) {
-      throw new BadRequestException(
-        'Trofe silinemez: önce tüm ayakları silin.',
-      );
+    // Legs use onDelete SET NULL on trophy; races cascade from legs — delete legs first.
+    const legs = await this.legsRepo.find({ where: { trophyId: id }, select: ['id'] });
+    if (legs.length > 0) {
+      await this.legsRepo.remove(legs);
     }
     await this.trophiesRepo.remove(trophy);
     return { ok: true };

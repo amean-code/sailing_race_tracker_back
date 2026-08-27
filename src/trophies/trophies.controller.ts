@@ -129,8 +129,8 @@ export class TrophiesController {
 
   @Delete(':id')
   @ApiCookieAuth(AUTH_COOKIE)
-  @Roles('ADMIN', 'SUPER_ADMIN')
-  @ApiOperation({ summary: 'Trofe sil (yalnızca admin)' })
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({ summary: 'Trofe sil (yalnızca süper yönetici; ayak ve yarışlar cascade)' })
   async remove(@Param('id') id: string, @CurrentUser() user: SessionUser) {
     return this.trophiesService.remove(id, user);
   }

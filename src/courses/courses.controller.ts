@@ -28,6 +28,14 @@ export class CoursesController {
     return { courses };
   }
 
+  @Get('available-for-race')
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Yarışa atanabilecek aktif parkurları listele' })
+  async findAvailableForRace() {
+    const courses = await this.coursesService.findAvailableForRace();
+    return { courses };
+  }
+
   @Get(':id')
   @Roles('SAILOR', 'COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Parkur detayı' })

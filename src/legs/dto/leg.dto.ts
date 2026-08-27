@@ -53,6 +53,12 @@ export class CreateLegRaceDto {
   @IsOptional()
   @IsObject()
   raceState?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ type: [String], description: 'Candidate course ids for this race (active course picked at start)' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  courseIds?: string[];
 }
 
 export class CreateLegDto {
@@ -242,4 +248,10 @@ export class CreateRaceUnderLegDto {
   @IsOptional()
   @IsObject()
   raceState?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ type: [String], description: 'Candidate course ids for this race (active course picked at start)' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  courseIds?: string[];
 }

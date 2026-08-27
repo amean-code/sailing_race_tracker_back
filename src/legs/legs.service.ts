@@ -163,7 +163,7 @@ export class LegsService {
       legId: leg.id,
       raceOrder,
       courseId: null,
-      courseIds: [],
+      courseIds: Array.isArray(dto.courseIds) ? dto.courseIds.filter(Boolean) : [],
       raceState: dto.raceState ?? {},
       createdById,
     });
@@ -251,6 +251,14 @@ export class LegsService {
 
     if (dto.title !== undefined) leg.title = dto.title;
     if (dto.description !== undefined) leg.description = dto.description ?? null;
+
+    const prevMeta = {
+      location: leg.location,
+      venue: leg.venue,
+      organizer: leg.organizer,
+      boatClass: leg.boatClass,
+    };
+
     if (dto.location !== undefined) leg.location = dto.location;
     if (dto.venue !== undefined) leg.venue = dto.venue ?? null;
     if (dto.organizer !== undefined) leg.organizer = dto.organizer ?? null;
@@ -274,7 +282,61 @@ export class LegsService {
     if (dto.legOrder !== undefined) leg.legOrder = dto.legOrder;
 
     await this.legsRepo.save(leg);
+
+    await this.propagateLegMetaToRaces(leg.id, prevMeta, {
+      location: leg.location,
+      venue: leg.venue,
+      organizer: leg.organizer,
+      boatClass: leg.boatClass,
+    });
+
     return this.withRaces(leg);
+  }
+
+  private async propagateLegMetaToRaces(
+    legId: string,
+    prev: {
+      location: string | null | undefined;
+      venue: string | null | undefined;
+      organizer: string | null | undefined;
+      boatClass: string | null | undefined;
+    },
+    next: {
+      location: string | null | undefined;
+      venue: string | null | undefined;
+      organizer: string | null | undefined;
+      boatClass: string | null | undefined;
+    },
+  ) {
+    const norm = (v: string | null | undefined) => (v ?? '').trim();
+    const fields = ['location', 'venue', 'organizer', 'boatClass'] as const;
+    const changed = fields.filter((key) => norm(prev[key]) !== norm(next[key]));
+    if (changed.length === 0) return;
+
+    const races = await this.racesRepo.find({ where: { legId } });
+    const dirty: Race[] = [];
+    for (const race of races) {
+      let touched = false;
+      for (const key of changed) {
+        if (race[key] == null || race[key] === '') continue;
+        if (norm(race[key]) !== norm(prev[key])) continue;
+        const value = next[key];
+        if (key === 'location') {
+          race.location = norm(value);
+        } else if (key === 'venue') {
+          race.venue = norm(value) || null;
+        } else if (key === 'organizer') {
+          race.organizer = norm(value) || null;
+        } else {
+          race.boatClass = norm(value) || null;
+        }
+        touched = true;
+      }
+      if (touched) dirty.push(race);
+    }
+    if (dirty.length > 0) {
+      await this.racesRepo.save(dirty);
+    }
   }
 
   async remove(id: string, user: SessionUser) {
@@ -356,7 +418,7 @@ export class LegsService {
       legOrder = maxOrder + 1;
     }
 
-    const raceDrafts = dto.races?.length
+    const raceDrafts = Array.isArray(dto.races)
       ? dto.races
       : [{ title: this.defaultRaceTitle(1) }];
 

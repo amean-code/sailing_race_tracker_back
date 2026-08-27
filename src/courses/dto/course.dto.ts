@@ -24,6 +24,11 @@ export class CheckpointDto {
   @IsString()
   type?: string;
 
+  @ApiPropertyOptional({ example: 'Rüzgarüstü' })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
   @ApiPropertyOptional({ example: [37.01, 27.4] })
   @IsOptional()
   coord?: [number, number];
