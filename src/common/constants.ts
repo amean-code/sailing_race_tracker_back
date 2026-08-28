@@ -1,3 +1,6 @@
+/** Max distance (m) from a mark to count as passed (buoy drift / GPS jitter). */
+export const CHECKPOINT_PROXIMITY_TOLERANCE_M = 5;
+
 export const APP_NAME = 'Themis Race Tracker';
 export const API_NAME = 'Themis Race Tracker API';
 export const AUTH_COOKIE = 'themis_session';

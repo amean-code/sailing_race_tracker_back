@@ -188,6 +188,12 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
             title: race.leg.title,
             kind: race.leg.kind,
             trophyId: race.leg.trophyId,
+            location: race.leg.location,
+            venue: race.leg.venue,
+            organizer: race.leg.organizer,
+            boatClass: race.leg.boatClass,
+            capacity: race.leg.capacity,
+            assignedCommitteeId: race.leg.assignedCommitteeId,
           }
         : null,
     } as RaceLike);

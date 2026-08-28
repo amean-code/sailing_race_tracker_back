@@ -13,6 +13,12 @@ export type LegSummaryLike = {
   title: string;
   kind?: string;
   trophyId?: string | null;
+  location?: string | null;
+  venue?: string | null;
+  organizer?: string | null;
+  boatClass?: string | null;
+  capacity?: number | null;
+  assignedCommitteeId?: string | null;
 };
 
 export type RaceLike = {
@@ -128,6 +134,12 @@ export function serializeRace(race: RaceLike) {
           title: race.leg.title,
           kind: race.leg.kind ?? null,
           trophyId: race.leg.trophyId ?? null,
+          location: race.leg.location ?? null,
+          venue: race.leg.venue ?? null,
+          organizer: race.leg.organizer ?? null,
+          boatClass: race.leg.boatClass ?? null,
+          capacity: race.leg.capacity ?? null,
+          assignedCommitteeId: race.leg.assignedCommitteeId ?? null,
         }
       : null,
     courseId: race.courseId,
@@ -135,6 +147,18 @@ export function serializeRace(race: RaceLike) {
     course: race.course ? serializeCourse(race.course) : null,
     courseSnapshot: race.courseSnapshot ?? null,
     raceState: race.raceState ?? {},
+    location: race.location ?? null,
+    venue: race.venue ?? null,
+    organizer: race.organizer ?? null,
+    boatClass: race.boatClass ?? null,
+    capacity: race.capacity ?? null,
+    registrationDeadline: race.registrationDeadline
+      ? toDate(race.registrationDeadline).toISOString()
+      : null,
+    assignedCommitteeId: race.assignedCommitteeId ?? null,
+    type: race.type ?? null,
+    trophyId: race.trophyId ?? null,
+    legOrder: race.legOrder ?? null,
     createdAt: toDate(race.createdAt).toISOString(),
     updatedAt: toDate(race.updatedAt).toISOString(),
     createdById: race.createdById ?? null,

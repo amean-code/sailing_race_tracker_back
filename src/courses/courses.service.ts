@@ -5,6 +5,10 @@ import { Course } from '../entities/course.entity';
 import { CreateCourseDto, UpdateCourseDto } from './dto/course.dto';
 import { CourseStatusEnum, UserRoleEnum, RaceStatusEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
+import {
+  normalizeCourseNameForStorage,
+  displayCourseName,
+} from '../common/utils/course-storage-name';
 
 import { Race } from '../entities/race.entity';
 
@@ -38,6 +42,7 @@ export class CoursesService {
     return {
       id: course.id,
       name: course.name,
+      displayName: displayCourseName(course.name),
       checkpoints: course.checkpoints,
       checkpointCount: (course.checkpoints ?? []).length,
       status: course.status,
@@ -111,7 +116,10 @@ export class CoursesService {
     }
 
     let initialStatus = CourseStatusEnum.ACTIVE;
-    const uniqueName = await this.resolveUniqueName(dto.name);
+    const storageName = user?.role === UserRoleEnum.COMMITTEE
+      ? normalizeCourseNameForStorage(dto.name, user)
+      : dto.name;
+    const uniqueName = await this.resolveUniqueName(storageName);
 
     const course = this.coursesRepo.create({
       name: uniqueName,
@@ -135,7 +143,10 @@ export class CoursesService {
       throw new ForbiddenException('Sadece kendi oluşturduğunuz parkuru düzenleyebilirsiniz.');
     }
 
-    course.name = await this.resolveUniqueName(dto.name, id);
+    const storageName = user?.role === UserRoleEnum.COMMITTEE
+      ? normalizeCourseNameForStorage(dto.name, user)
+      : dto.name;
+    course.name = await this.resolveUniqueName(storageName, id);
     course.checkpoints = dto.checkpoints as unknown as Record<string, unknown>[];
     const saved = await this.coursesRepo.save(course);
     return this.findOne(saved.id, user);
