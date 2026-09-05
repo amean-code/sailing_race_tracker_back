@@ -1184,12 +1184,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   async exportRaceResults(
     id: string,
     format: RaceResultsExportFormat = 'csv',
-    user?: SessionUser,
   ): Promise<RaceResultsExportFile> {
-    const race = await this.racesRepo.findOne({ where: { id } });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
-    if (user) this.assertCanManageRace(race, user);
-
     const { raceTitle, headers, rows } = await this.buildRaceResultsTable(id);
     const baseName = this.sanitizeExportFilename(raceTitle);
 
@@ -1295,8 +1290,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getLiveTrails(raceId: string, user?: SessionUser) {
-    const race = await this.racesRepo.findOne({ where: { id: raceId } });
-    if (!race) throw new NotFoundException('Yarış bulunamadı');
+    const race = await this.loadRace(raceId);
     if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
     if (user) this.assertCanManageRace(race, user);
 

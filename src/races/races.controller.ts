@@ -181,11 +181,10 @@ export class RacesController {
   async exportRaceResults(
     @Param('id') id: string,
     @Query('format') format: string | undefined,
-    @CurrentUser() user: SessionUser,
     @Res() res: Response,
   ) {
     const normalized = String(format || 'csv').toLowerCase() === 'xlsx' ? 'xlsx' : 'csv';
-    const file = await this.racesService.exportRaceResults(id, normalized, user);
+    const file = await this.racesService.exportRaceResults(id, normalized);
     const safeFilename = file.filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '') || `race-results.${normalized}`;
     res.setHeader('Content-Type', file.contentType);
     res.setHeader(
