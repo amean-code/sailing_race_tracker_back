@@ -18,6 +18,7 @@ import { RaceApplication } from '../entities/race-application.entity';
 import { RaceResult } from '../entities/race-result.entity';
 import { CheckpointPass } from '../entities/checkpoint-pass.entity';
 import { TrackPoint } from '../entities/track-point.entity';
+import { Boat } from '../entities/boat.entity';
 import {
   RaceStatusEnum,
   NotificationEventEnum,
@@ -71,6 +72,8 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     private readonly coursesRepo: Repository<Course>,
     @InjectRepository(TrackPoint)
     private readonly trackPointsRepo: Repository<TrackPoint>,
+    @InjectRepository(Boat)
+    private readonly boatsRepo: Repository<Boat>,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
     private readonly notificationsService: NotificationsService,
@@ -1253,10 +1256,59 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       select: ['boatId', 'lat', 'lng', 'heading', 'speed', 'recordedAt'],
     });
 
-    const applications = await this.applicationsRepo.find({
+    const boatIds = [
+      ...new Set(trackPoints.map((tp) => tp.boatId).filter(Boolean)),
+    ];
+
+    // Prefer leg applications; also pull apps linked to GPS boats (covers orphaned leg_id rows)
+    const applicationsByLeg = await this.applicationsRepo.find({
       where: { legId: race.legId },
       select: ['id', 'boatId', 'boatName', 'sailNumber'],
     });
+    const applicationsByBoat =
+      boatIds.length > 0
+        ? await this.applicationsRepo.find({
+            where: { boatId: In(boatIds) },
+            select: ['id', 'boatId', 'boatName', 'sailNumber'],
+          })
+        : [];
+
+    const applicationsMap = new Map<string, RaceApplication>();
+    for (const app of [...applicationsByLeg, ...applicationsByBoat]) {
+      applicationsMap.set(app.id, app);
+    }
+    const applications = [...applicationsMap.values()];
+
+    const boats =
+      boatIds.length > 0
+        ? await this.boatsRepo.find({
+            where: [{ id: In(boatIds) }, { raceId }],
+            select: ['id', 'name', 'sailNumber', 'applicationId', 'displayColor'],
+          })
+        : await this.boatsRepo.find({
+            where: { raceId },
+            select: ['id', 'name', 'sailNumber', 'applicationId', 'displayColor'],
+          });
+
+    // Ensure every tracked boat has an application-shaped entry for the frontend matcher
+    const appByBoatId = new Map(
+      applications.filter((a) => a.boatId).map((a) => [a.boatId as string, a]),
+    );
+    for (const boat of boats) {
+      if (!appByBoatId.has(boat.id)) {
+        applications.push({
+          id: boat.applicationId || boat.id,
+          boatId: boat.id,
+          boatName: boat.name || '',
+          sailNumber: boat.sailNumber || '',
+        } as RaceApplication);
+        appByBoatId.set(boat.id, applications[applications.length - 1]);
+      } else {
+        const app = appByBoatId.get(boat.id)!;
+        if (!app.boatName && boat.name) app.boatName = boat.name;
+        if (!app.sailNumber && boat.sailNumber) app.sailNumber = boat.sailNumber;
+      }
+    }
 
     const startPasses = await this.checkpointPassRepo.find({
       where: { raceId, checkpointIndex: 0 },
@@ -1264,10 +1316,16 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     });
 
     const startTimes: Record<string, number> = {};
+    const boatByAppId = new Map(
+      boats
+        .filter((b) => b.applicationId)
+        .map((b) => [b.applicationId as string, b.id]),
+    );
     startPasses.forEach((p) => {
       const app = applications.find((a) => a.id === p.applicationId);
-      if (app?.boatId) {
-        startTimes[app.boatId] = p.passedAt.getTime();
+      const boatId = app?.boatId || boatByAppId.get(p.applicationId);
+      if (boatId) {
+        startTimes[boatId] = p.passedAt.getTime();
       }
     });
 
@@ -1279,7 +1337,19 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     return {
       trackPoints,
-      applications,
+      applications: applications.map((a) => ({
+        id: a.id,
+        boatId: a.boatId,
+        boatName: a.boatName,
+        sailNumber: a.sailNumber,
+      })),
+      boats: boats.map((b) => ({
+        id: b.id,
+        name: b.name,
+        sailNumber: b.sailNumber,
+        applicationId: b.applicationId,
+        displayColor: b.displayColor,
+      })),
       startTimes,
       raceTiming: {
         startedAt: startedAtIso,
