@@ -2,7 +2,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as turf from '@turf/turf';
 import {
-  BUOY_CPA_AWARD_KM,
   CHECKPOINT_PROXIMITY_TOLERANCE_KM,
   checkBuoyCheckpointCrossed,
   checkLineCheckpointCrossed,
@@ -127,7 +126,7 @@ describe('checkLineCheckpointCrossed', () => {
 describe('checkBuoyCheckpointCrossed', () => {
   const buoyCoord: [number, number] = [41.0, 29.0];
 
-  it('awards pass within 5 m with correct port rounding', () => {
+  it('awards pass with correct port rounding regardless of distance', () => {
     const north = turf.destination(
       turf.point([buoyCoord[1], buoyCoord[0]]),
       4 / 1000,
@@ -147,7 +146,7 @@ describe('checkBuoyCheckpointCrossed', () => {
     assert.equal(result.state.minDistance, Infinity);
   });
 
-  it('does not award pass within 5 m on wrong rounding side', () => {
+  it('does not award pass on wrong rounding side', () => {
     const south = turf.destination(
       turf.point([buoyCoord[1], buoyCoord[0]]),
       4 / 1000,
@@ -166,7 +165,45 @@ describe('checkBuoyCheckpointCrossed', () => {
     assert.equal(result.crossed, false);
   });
 
-  it('uses 5 m CPA award threshold constant', () => {
-    assert.equal(BUOY_CPA_AWARD_KM, 0.005);
+  it('awards pass at distant CPA with correct port rounding', () => {
+    const north = turf.destination(
+      turf.point([buoyCoord[1], buoyCoord[0]]),
+      50 / 1000,
+      0,
+      { units: 'kilometers' },
+    );
+    const [lng, lat] = north.geometry.coordinates;
+    const result = checkBuoyCheckpointCrossed(
+      buoyCoord,
+      'port',
+      280,
+      lat,
+      lng,
+      { minDistance: Infinity },
+    );
+    assert.equal(result.crossed, true);
+    assert.equal(result.rejectReason, undefined);
+  });
+
+  it('rejects distant CPA when past abeam on wrong rounding side', () => {
+    const south = turf.destination(
+      turf.point([buoyCoord[1], buoyCoord[0]]),
+      50 / 1000,
+      180,
+      { units: 'kilometers' },
+    );
+    const [lng, lat] = south.geometry.coordinates;
+    // Heading south: buoy is abaft; CPA side is starboard → wrong for port rule.
+    const result = checkBuoyCheckpointCrossed(
+      buoyCoord,
+      'port',
+      180,
+      lat,
+      lng,
+      { minDistance: Infinity },
+    );
+    assert.equal(result.crossed, false);
+    assert.equal(result.rejectReason, 'wrong_rounding_side');
+    assert.equal(result.state.minDistance, Infinity);
   });
 });

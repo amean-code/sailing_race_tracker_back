@@ -9,6 +9,13 @@ import { CheckpointPass } from '../entities/checkpoint-pass.entity';
 import { TrackPoint } from '../entities/track-point.entity';
 import { RacesService } from '../races/races.service';
 import {
+  allCheckpointsPassed,
+  CHECKPOINT_PASS_SOURCE_GPS,
+  firstUnpassedIndex,
+  getCandidateCheckpointIndexes,
+  passedIndexSet,
+} from '../common/checkpoint-progress';
+import {
   checkBuoyCheckpointCrossed,
   checkLineCheckpointCrossed,
   normalizeLineCrossing,
@@ -17,8 +24,8 @@ import {
 @Injectable()
 export class RaceEngineService {
   private readonly logger = new Logger(RaceEngineService.name);
-  
-  // In-memory state: boatId -> { lastLat, lastLng, lastHeading, lastTimestamp }
+
+  // In-memory state: boatId -> { lastLat, lastLng, lastHeading, buoyByIndex }
   private boatStates = new Map<string, any>();
 
   constructor(
@@ -34,8 +41,7 @@ export class RaceEngineService {
   @OnEvent('gps.received')
   async handleGpsReceived(payload: { raceId: string; boatId: string; lat: number; lng: number; heading: number; recordedAt: string }) {
     const { raceId, boatId, lat, lng, heading, recordedAt } = payload;
-    
-    // Broadcast live position to websocket
+
     this.eventEmitter.emit('boat.position.updated', {
       raceId,
       boatId,
@@ -67,18 +73,16 @@ export class RaceEngineService {
       lng: lastPoint.lng,
       heading: lastPoint.heading ?? 0,
       recordedAt: lastPoint.recordedAt.toISOString(),
+      buoyByIndex: {},
     };
     this.boatStates.set(boatId, seeded);
     return seeded;
   }
 
   private async processTrackPoint(raceId: string, boatId: string, lat: number, lng: number, heading: number, recordedAt: string) {
-    // Always update memory state first so we have a valid previousState for line intersection when race starts
     let previousState = this.boatStates.get(boatId);
     if (!previousState) {
       previousState = await this.hydrateBoatState(boatId, raceId);
-      // If we just hydrated the exact same latest point, skip using it as previous
-      // (the incoming point may be a duplicate/near-duplicate of the last DB row)
       if (
         previousState &&
         Math.abs(previousState.lat - lat) < 1e-9 &&
@@ -93,11 +97,9 @@ export class RaceEngineService {
       lng,
       heading,
       recordedAt,
-      minDistance: previousState?.minDistance,
-      closestSide: previousState?.closestSide,
+      buoyByIndex: previousState?.buoyByIndex ?? {},
     });
 
-    // 1. Get Race & Course (applications are per-leg)
     const race = await this.racesRepo.findOne({ where: { id: raceId }, relations: ['course'] });
     if (!race || !race.legId || race.status !== 'IN_PROGRESS') return;
 
@@ -115,7 +117,7 @@ export class RaceEngineService {
     } else if (race.course && Array.isArray(race.course.checkpoints)) {
       checkpoints = race.course.checkpoints as any[];
     }
-    
+
     if (!checkpoints || checkpoints.length === 0) return;
 
     const targets = checkpoints.filter((cp) => {
@@ -123,135 +125,153 @@ export class RaceEngineService {
       return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
     });
 
-    // 3. Get last passed checkpoint index
-    const passes = await this.checkpointPassRepo.find({
+    const existingPasses = await this.checkpointPassRepo.find({
       where: { applicationId: app.id, raceId },
-      order: { checkpointIndex: 'DESC' },
-      take: 1,
     });
-    
-    // activeTargetIndex is the next checkpoint to pass
-    // If we have passes, next is max(index) + 1. If 0 passes, next is 0 (start line).
-    const activeTargetIndex = passes.length > 0 ? passes[0].checkpointIndex + 1 : 0;
-    
-    if (activeTargetIndex >= targets.length) {
-      return; // Race already finished for this boat
+    const passed = passedIndexSet(existingPasses);
+
+    if (allCheckpointsPassed(passed, targets.length)) {
+      return;
     }
 
-    const target = targets[activeTargetIndex];
-    // previousState is already captured above
-    // previousState was grabbed at the top of the function before setting the new state
-    // Now we check if the previousState we grabbed had valid coordinates
+    if (!previousState) return;
 
-    if (!previousState) return; // Need at least two points to form a line/vector
+    const boatState = this.boatStates.get(boatId);
+    if (!boatState.buoyByIndex) boatState.buoyByIndex = {};
 
-    // 5. Check Intersection / Rounding
-    let isCrossed = false;
+    let recordedAny = false;
+    let keepChecking = true;
 
-    const kind = target.kind || target.type;
-    const isLine = kind === 'start' || kind === 'finish' || kind === 'gate';
-    let crossingPoint: { lat: number; lng: number } | null = null;
+    while (keepChecking) {
+      keepChecking = false;
+      const candidates = getCandidateCheckpointIndexes(passed, targets.length);
+      for (const checkpointIndex of candidates) {
+        const target = targets[checkpointIndex];
+        if (!target) continue;
 
-    if (isLine) {
-      if (target.coords && target.coords.length === 2) {
-        const lineResult = checkLineCheckpointCrossed(
-          target.coords,
-          target.crossing,
-          previousState.lng,
-          previousState.lat,
-          lng,
-          lat,
-        );
-        if (lineResult.crossed) {
-          isCrossed = true;
-          crossingPoint = lineResult.crossingPoint;
-        } else if (lineResult.rejectReason === 'wrong_direction') {
-          this.logger.debug(
-            `Boat ${boatId} rejected checkpoint ${activeTargetIndex}: wrong crossing direction (required ${normalizeLineCrossing(target.crossing)})`,
+        const kind = target.kind || target.type;
+        const isLine = kind === 'start' || kind === 'finish' || kind === 'gate';
+        let isCrossed = false;
+        let crossingPoint: { lat: number; lng: number } | null = null;
+
+        if (isLine) {
+          if (target.coords && target.coords.length === 2) {
+            const lineResult = checkLineCheckpointCrossed(
+              target.coords,
+              target.crossing,
+              previousState.lng,
+              previousState.lat,
+              lng,
+              lat,
+            );
+            if (lineResult.crossed) {
+              isCrossed = true;
+              crossingPoint = lineResult.crossingPoint;
+            } else if (lineResult.rejectReason === 'wrong_direction') {
+              this.logger.debug(
+                `Boat ${boatId} rejected checkpoint ${checkpointIndex}: wrong crossing direction (required ${normalizeLineCrossing(target.crossing)})`,
+              );
+            }
+          }
+        } else if (kind === 'buoy' && target.coord) {
+          const buoyState = boatState.buoyByIndex[checkpointIndex] ?? {
+            minDistance: Infinity,
+            closestSide: undefined,
+          };
+          const buoyResult = checkBuoyCheckpointCrossed(
+            target.coord,
+            target.rounding,
+            heading,
+            lat,
+            lng,
+            {
+              minDistance: buoyState.minDistance ?? Infinity,
+              closestSide: buoyState.closestSide,
+            },
           );
+          isCrossed = buoyResult.crossed;
+          boatState.buoyByIndex[checkpointIndex] = buoyResult.state;
+          if (buoyResult.rejectReason === 'wrong_rounding_side') {
+            this.logger.debug(
+              `Boat ${boatId} rejected buoy ${checkpointIndex}: wrong rounding side (required ${target.rounding}, cpa ${buoyResult.state.closestSide})`,
+            );
+          }
         }
-      }
-    } else if (kind === 'buoy' && target.coord) {
-      const state = this.boatStates.get(boatId);
-      const buoyResult = checkBuoyCheckpointCrossed(
-        target.coord,
-        target.rounding,
-        heading,
-        lat,
-        lng,
-        {
-          minDistance: state.minDistance ?? Infinity,
-          closestSide: state.closestSide,
-        },
-      );
-      isCrossed = buoyResult.crossed;
-      state.minDistance = buoyResult.state.minDistance;
-      state.closestSide = buoyResult.state.closestSide;
-      if (buoyResult.rejectReason === 'wrong_rounding_side') {
-        this.logger.debug(
-          `Boat ${boatId} rejected buoy ${activeTargetIndex}: wrong rounding side (required ${target.rounding}, cpa ${state.closestSide})`,
-        );
-      }
-    }
 
-    if (isCrossed) {
-      this.logger.log(`Boat ${boatId} crossed checkpoint ${activeTargetIndex}`);
-      
-      const checkpointId = target.id ?? `CP${activeTargetIndex}`;
-      
-      // Calculate elapsed seconds from race start or start line
-      let elapsedSeconds = null;
-      if (race.raceState?.startedAt) {
-        elapsedSeconds = Math.floor((new Date(recordedAt).getTime() - new Date(race.raceState.startedAt as string).getTime()) / 1000);
-      } else if (activeTargetIndex > 0) {
-         // get start line pass
-         const startPass = await this.checkpointPassRepo.findOne({
-            where: { applicationId: app.id, raceId, checkpointIndex: 0 }
-         });
-         if (startPass) {
-            elapsedSeconds = Math.floor((new Date(recordedAt).getTime() - new Date(startPass.passedAt).getTime()) / 1000);
-         }
-      } else if (activeTargetIndex === 0) {
-         elapsedSeconds = 0; // Started just now
-      }
+        if (!isCrossed) continue;
 
-      // 6. Save to DB
-      await this.racesService.recordCheckpointPass(raceId, {
-        applicationId: app.id,
-        checkpointIndex: activeTargetIndex,
-        checkpointId,
-        passedAt: recordedAt,
-        elapsedSeconds: elapsedSeconds !== null ? elapsedSeconds : undefined,
-        crossLat: crossingPoint?.lat,
-        crossLng: crossingPoint?.lng,
-      });
+        this.logger.log(`Boat ${boatId} crossed checkpoint ${checkpointIndex}`);
 
-      // 7. Emit events
-      this.eventEmitter.emit('checkpoint.passed', {
-        raceId,
-        boatId,
-        applicationId: app.id,
-        checkpointIndex: activeTargetIndex,
-        checkpointId,
-        passedAt: recordedAt,
-        elapsedSeconds,
-        crossLat: crossingPoint?.lat ?? null,
-        crossLng: crossingPoint?.lng ?? null,
-      });
+        const checkpointId = target.id ?? `CP${checkpointIndex}`;
+        let elapsedSeconds: number | null = null;
+        if (race.raceState?.startedAt) {
+          elapsedSeconds = Math.floor(
+            (new Date(recordedAt).getTime() - new Date(race.raceState.startedAt as string).getTime()) / 1000,
+          );
+        } else if (checkpointIndex > 0) {
+          const startPass = existingPasses.find((p) => p.checkpointIndex === 0);
+          if (startPass) {
+            elapsedSeconds = Math.floor(
+              (new Date(recordedAt).getTime() - new Date(startPass.passedAt).getTime()) / 1000,
+            );
+          }
+        } else {
+          elapsedSeconds = 0;
+        }
 
-      // Trigger Leaderboard Update Event
-      this.eventEmitter.emit('leaderboard.updated', {
-        raceId,
-      });
+        await this.racesService.recordCheckpointPass(raceId, {
+          applicationId: app.id,
+          checkpointIndex,
+          checkpointId,
+          passedAt: recordedAt,
+          elapsedSeconds: elapsedSeconds !== null ? elapsedSeconds : undefined,
+          crossLat: crossingPoint?.lat,
+          crossLng: crossingPoint?.lng,
+          source: CHECKPOINT_PASS_SOURCE_GPS,
+        });
 
-      if (activeTargetIndex === targets.length - 1) {
-         this.eventEmitter.emit('boat.finished', {
+        passed.add(checkpointIndex);
+        existingPasses.push({
+          checkpointIndex,
+          passedAt: new Date(recordedAt),
+        } as CheckpointPass);
+        recordedAny = true;
+        keepChecking = true;
+
+        const activeTargetIndex = firstUnpassedIndex(passed, targets.length);
+        const finished = allCheckpointsPassed(passed, targets.length);
+
+        this.eventEmitter.emit('checkpoint.passed', {
+          raceId,
+          boatId,
+          applicationId: app.id,
+          checkpointIndex,
+          checkpointId,
+          passedAt: recordedAt,
+          elapsedSeconds,
+          crossLat: crossingPoint?.lat ?? null,
+          crossLng: crossingPoint?.lng ?? null,
+          activeTargetIndex,
+          hasFinished: finished,
+        });
+
+        if (finished) {
+          this.eventEmitter.emit('boat.finished', {
             raceId,
             boatId,
             applicationId: app.id,
             finishTime: recordedAt,
-         });
+          });
+        }
+
+        break;
       }
+    }
+
+    if (recordedAny) {
+      this.eventEmitter.emit('leaderboard.updated', {
+        raceId,
+      });
     }
   }
 }

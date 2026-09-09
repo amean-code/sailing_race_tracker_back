@@ -38,6 +38,18 @@ export class RaceResult {
   @Column({ name: 'fleet_size', type: 'int', nullable: true })
   fleetSize!: number | null;
 
+  @Column({ name: 'missed_checkpoint_indexes', type: 'jsonb', nullable: true })
+  missedCheckpointIndexes!: number[] | null;
+
+  @Column({ name: 'dnf_reason', type: 'text', nullable: true })
+  dnfReason!: string | null;
+
+  @Column({ name: 'committee_accepted', type: 'boolean', default: false })
+  committeeAccepted!: boolean;
+
+  @Column({ name: 'committee_accepted_at', type: 'timestamp', nullable: true })
+  committeeAcceptedAt!: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

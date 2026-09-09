@@ -3,12 +3,8 @@ import { CHECKPOINT_PROXIMITY_TOLERANCE_M } from '../common/constants';
 
 export const CHECKPOINT_PROXIMITY_TOLERANCE_KM = CHECKPOINT_PROXIMITY_TOLERANCE_M / 1000;
 
-/** Buoy CPA thresholds derived from proximity tolerance. */
-export const BUOY_CPA_AWARD_KM = CHECKPOINT_PROXIMITY_TOLERANCE_KM;
-export const BUOY_CPA_SECONDARY_MAX_KM = CHECKPOINT_PROXIMITY_TOLERANCE_KM * 1.6;
+/** Clearance past CPA before treating an abandoned approach as incomplete (~2 m). */
 export const BUOY_CPA_CLEARANCE_KM = CHECKPOINT_PROXIMITY_TOLERANCE_KM * 0.4;
-export const BUOY_WRONG_SIDE_RESET_KM = CHECKPOINT_PROXIMITY_TOLERANCE_KM * 2;
-export const BUOY_INCOMPLETE_RESET_KM = CHECKPOINT_PROXIMITY_TOLERANCE_KM * 2.4;
 
 export type LineCoords = [[number, number], [number, number]];
 
@@ -255,44 +251,41 @@ export function checkBuoyCheckpointCrossed(
     hasRoundedCorrectly = Math.abs(relativeBearing) > 90;
   }
 
-  if (nextState.minDistance < BUOY_CPA_AWARD_KM && hasRoundedCorrectly) {
+  // Award on correct port/starboard rounding only — no CPA distance limit.
+  if (hasRoundedCorrectly) {
     return {
       crossed: true,
       state: { minDistance: Infinity, closestSide: undefined },
     };
   }
 
-  if (
-    distance > nextState.minDistance + BUOY_CPA_CLEARANCE_KM &&
-    nextState.minDistance < BUOY_CPA_SECONDARY_MAX_KM
-  ) {
-    let sideCorrect = true;
-    if (roundingRule === 'port') sideCorrect = nextState.closestSide === 'port';
-    if (roundingRule === 'starboard') {
-      sideCorrect = nextState.closestSide === 'starboard';
-    }
+  const pastAbeam = Math.abs(relativeBearing) > 90;
+  if (pastAbeam && nextState.closestSide) {
+    const sideCorrect =
+      roundingRule === 'port'
+        ? nextState.closestSide === 'port'
+        : roundingRule === 'starboard'
+          ? nextState.closestSide === 'starboard'
+          : true;
 
-    if (sideCorrect && hasRoundedCorrectly) {
-      return {
-        crossed: true,
-        state: { minDistance: Infinity, closestSide: undefined },
-      };
-    }
-
-    if (!sideCorrect && distance > BUOY_WRONG_SIDE_RESET_KM) {
+    if (!sideCorrect) {
       return {
         crossed: false,
         state: { minDistance: Infinity, closestSide: undefined },
         rejectReason: 'wrong_rounding_side',
       };
     }
+  }
 
-    if (distance > BUOY_INCOMPLETE_RESET_KM) {
-      return {
-        crossed: false,
-        state: { minDistance: Infinity, closestSide: undefined },
-      };
-    }
+  // Abandoned approach: pulled away from CPA without going past abeam.
+  if (
+    distance > nextState.minDistance + BUOY_CPA_CLEARANCE_KM &&
+    !pastAbeam
+  ) {
+    return {
+      crossed: false,
+      state: { minDistance: Infinity, closestSide: undefined },
+    };
   }
 
   return { crossed: false, state: nextState };

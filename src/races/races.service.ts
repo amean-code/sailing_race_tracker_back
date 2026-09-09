@@ -36,8 +36,22 @@ import {
   RaceActionDto,
 } from './dto/race.dto';
 import { RecordCheckpointPassDto } from './dto/checkpoint-pass.dto';
+import { ReviewRaceResultDto } from './dto/review-race-result.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../notifications/mail.service';
+import {
+  allCheckpointsPassed,
+  buildMissedCheckpoints,
+  CHECKPOINT_PASS_SOURCE_COMMITTEE,
+  CHECKPOINT_PASS_SOURCE_GPS,
+  deriveResultStatus,
+  firstUnpassedIndex,
+  formatCheckpointExportCells,
+  formatExportStatusLabel,
+  formatMissedCheckpointReason,
+  missedCheckpointIndexes,
+  passedIndexSet,
+} from '../common/checkpoint-progress';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import ExcelJS from 'exceljs';
@@ -628,10 +642,15 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     });
     const rank = existing ? (existing.rank ?? passedCount) : passedCount + 1;
 
+    const source = dto.source === CHECKPOINT_PASS_SOURCE_COMMITTEE
+      ? CHECKPOINT_PASS_SOURCE_COMMITTEE
+      : CHECKPOINT_PASS_SOURCE_GPS;
+
     if (existing) {
       existing.passedAt = new Date(dto.passedAt);
       existing.elapsedSeconds = dto.elapsedSeconds ?? null;
       existing.rank = rank;
+      existing.source = source;
       if (dto.crossLat != null) existing.crossLat = dto.crossLat;
       if (dto.crossLng != null) existing.crossLng = dto.crossLng;
       await this.checkpointPassRepo.save(existing);
@@ -648,9 +667,111 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       rank,
       crossLat: dto.crossLat ?? null,
       crossLng: dto.crossLng ?? null,
+      source,
     });
     const saved = await this.checkpointPassRepo.save(pass);
     return { ok: true, id: saved.id, rank };
+  }
+
+  async reviewRaceResult(
+    raceId: string,
+    applicationId: string,
+    dto: ReviewRaceResultDto,
+    user: SessionUser,
+  ) {
+    const race = await this.loadRace(raceId);
+    if (!['COMMITTEE', 'ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
+      throw new ForbiddenException('Bu işlem için yetkiniz yok');
+    }
+    this.assertCanManageRace(race, user);
+
+    if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
+
+    const app = await this.applicationsRepo.findOne({
+      where: { id: applicationId, legId: race.legId },
+    });
+    if (!app) throw new NotFoundException('Başvuru bulunamadı');
+
+    const targets = this.getRaceTargets(race);
+    const raceOver =
+      race.status === RaceStatusEnum.FINISHED || race.status === RaceStatusEnum.CANCELLED;
+    const passedAt =
+      (race.raceState?.finishedAt as string | undefined) || new Date().toISOString();
+
+    if (dto.action === 'confirm_pass' || dto.action === 'reject_pass') {
+      if (dto.checkpointIndex == null) {
+        throw new BadRequestException('checkpointIndex gerekli');
+      }
+      if (dto.checkpointIndex < 0 || dto.checkpointIndex >= targets.length) {
+        throw new BadRequestException('Geçersiz checkpoint');
+      }
+    }
+
+    if (dto.action === 'confirm_pass') {
+      const existing = await this.checkpointPassRepo.findOne({
+        where: { applicationId, raceId, checkpointIndex: dto.checkpointIndex },
+      });
+      if (!existing) {
+        const target = targets[dto.checkpointIndex!];
+        await this.recordCheckpointPass(raceId, {
+          applicationId,
+          checkpointIndex: dto.checkpointIndex!,
+          checkpointId: target?.id ?? `CP${dto.checkpointIndex}`,
+          passedAt,
+          source: CHECKPOINT_PASS_SOURCE_COMMITTEE,
+        });
+      }
+    } else if (dto.action === 'reject_pass') {
+      await this.checkpointPassRepo.delete({
+        applicationId,
+        raceId,
+        checkpointIndex: dto.checkpointIndex,
+      });
+      const result = await this.resultsRepo.findOne({ where: { applicationId, raceId } });
+      if (result?.committeeAccepted) {
+        result.committeeAccepted = false;
+        result.committeeAcceptedAt = null;
+        await this.resultsRepo.save(result);
+      }
+    } else if (dto.action === 'accept_race') {
+      if (!raceOver) {
+        throw new BadRequestException('Yarış bittikten sonra kabul edilebilir.');
+      }
+      const appPasses = await this.checkpointPassRepo.find({
+        where: { applicationId, raceId },
+      });
+      const passed = passedIndexSet(appPasses);
+      const missed = missedCheckpointIndexes(passed, targets.length);
+      for (const checkpointIndex of missed) {
+        const target = targets[checkpointIndex];
+        await this.recordCheckpointPass(raceId, {
+          applicationId,
+          checkpointIndex,
+          checkpointId: target?.id ?? `CP${checkpointIndex}`,
+          passedAt,
+          source: CHECKPOINT_PASS_SOURCE_COMMITTEE,
+        });
+      }
+      let result = await this.resultsRepo.findOne({ where: { applicationId, raceId } });
+      if (!result) {
+        result = this.resultsRepo.create({ applicationId, raceId });
+      }
+      result.committeeAccepted = true;
+      result.committeeAcceptedAt = new Date();
+      result.status = RaceResultStatusEnum.FINISHED;
+      await this.resultsRepo.save(result);
+    } else {
+      throw new BadRequestException('Geçersiz işlem');
+    }
+
+    if (raceOver) {
+      await this.finalizeRaceResults(raceId, { notifyReferee: false });
+    }
+
+    const saved = await this.loadRace(raceId);
+    this.emitRaceUpdated(saved);
+    this.eventEmitter.emit('leaderboard.updated', { raceId });
+    return this.getStandings(raceId);
   }
 
   private getRaceTargets(race: Race): any[] {
@@ -666,43 +787,17 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Dynamic race result status from checkpoint progress.
-   * DNS = never crossed start; DNF = started but race ended before finish;
-   * DSQ = manual disqualification (preserved when already stored).
-   * Persisted only on finalize so live GPS tracking keeps working.
+   * FINISHED = every race target has a pass; DNS = never crossed start;
+   * DNF = started but missing at least one mark when the race ended.
    */
   private deriveResultStatus(opts: {
     storedStatus: string;
-    maxCpIndex: number;
-    finishIndex: number;
+    passedIndexes: Iterable<number>;
+    targetCount: number;
     raceOver: boolean;
+    committeeAccepted?: boolean;
   }): string {
-    const { storedStatus, maxCpIndex, finishIndex, raceOver } = opts;
-    if (storedStatus === ApplicationStatusEnum.WITHDRAWN) {
-      return ApplicationStatusEnum.WITHDRAWN;
-    }
-    if (storedStatus === ApplicationStatusEnum.PENDING) {
-      return ApplicationStatusEnum.PENDING;
-    }
-    // Manual / already-finalized penalties win over derived progress
-    if (storedStatus === ApplicationStatusEnum.DSQ) {
-      return ApplicationStatusEnum.DSQ;
-    }
-    if (
-      raceOver &&
-      (storedStatus === ApplicationStatusEnum.DNS || storedStatus === ApplicationStatusEnum.DNF)
-    ) {
-      return storedStatus;
-    }
-
-    const finished = finishIndex >= 0 && maxCpIndex === finishIndex;
-    const started = maxCpIndex >= 0;
-
-    if (finished) return 'FINISHED';
-    if (!started) {
-      return raceOver ? ApplicationStatusEnum.DNS : 'NOT_STARTED';
-    }
-    // Started but incomplete when race ends → DNF (yarıda kalan)
-    return raceOver ? ApplicationStatusEnum.DNF : 'RACING';
+    return deriveResultStatus(opts);
   }
 
   async getStandings(raceId: string, user?: SessionUser) {
@@ -734,7 +829,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     const raceStartedAt = race.raceState?.startedAt as string | undefined;
     const targets = this.getRaceTargets(race);
-    const finishIndex = targets.length > 0 ? targets.length - 1 : -1;
+    const targetCount = targets.length;
     const raceOver =
       race.status === RaceStatusEnum.FINISHED || race.status === RaceStatusEnum.CANCELLED;
 
@@ -743,22 +838,28 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       const appPasses = (allPassesByApp.get(app.id) ?? [])
         .sort((a, b) => a.checkpointIndex - b.checkpointIndex);
       const raceResult = resultByApp.get(app.id);
+      const passed = passedIndexSet(appPasses);
+      const missedCheckpoints = buildMissedCheckpoints(targets, passed);
+      const dnfReason =
+        raceResult?.dnfReason ||
+        (missedCheckpoints.length > 0
+          ? formatMissedCheckpointReason(missedCheckpoints.map((item) => item.label))
+          : null);
 
       const elapsedNow = raceStartedAt
         ? Math.floor((Date.now() - new Date(raceStartedAt).getTime()) / 1000)
         : null;
 
       const maxCpIndex = best?.checkpointIndex ?? -1;
-      const isFinished = finishIndex >= 0 && maxCpIndex === finishIndex;
+      const isFinished =
+        allCheckpointsPassed(passed, targetCount) || Boolean(raceResult?.committeeAccepted);
       const storedStatus = String(raceResult?.status ?? app.status);
       const resultStatus = this.deriveResultStatus({
-        storedStatus:
-          storedStatus === RaceResultStatusEnum.FINISHED
-            ? ApplicationStatusEnum.APPROVED
-            : storedStatus,
-        maxCpIndex,
-        finishIndex,
+        storedStatus,
+        passedIndexes: passed,
+        targetCount,
         raceOver,
+        committeeAccepted: Boolean(raceResult?.committeeAccepted),
       });
 
       return {
@@ -772,6 +873,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         elapsedSeconds: best?.elapsedSeconds ?? null,
         rank: best?.rank ?? null,
         elapsedNow,
+        activeTargetIndex: firstUnpassedIndex(passed, targetCount),
         passes: appPasses.map((p) => {
           const target = targets[p.checkpointIndex];
           const checkpointKind = target?.kind || target?.type || null;
@@ -779,13 +881,18 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
             checkpointIndex: p.checkpointIndex,
             checkpointId: p.checkpointId,
             checkpointKind,
+            checkpointName: typeof target?.name === 'string' ? target.name : null,
             passedAt: p.passedAt.toISOString(),
             elapsedSeconds: p.elapsedSeconds,
             rank: p.rank,
             crossLat: p.crossLat ?? null,
             crossLng: p.crossLng ?? null,
+            source: p.source ?? CHECKPOINT_PASS_SOURCE_GPS,
           };
         }),
+        missedCheckpoints,
+        dnfReason: resultStatus === ApplicationStatusEnum.DNF ? dnfReason : null,
+        committeeAccepted: Boolean(raceResult?.committeeAccepted),
         status: resultStatus,
         storedStatus: raceResult?.status ?? app.status,
         finishPosition: raceResult?.finishPosition ?? null,
@@ -826,7 +933,11 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }
 
-  private async finalizeRaceResults(raceId: string): Promise<void> {
+  private async finalizeRaceResults(
+    raceId: string,
+    opts: { notifyReferee?: boolean } = {},
+  ): Promise<void> {
+    const notifyReferee = opts.notifyReferee !== false;
     const race = await this.loadRace(raceId);
     if (!race.legId) return;
 
@@ -834,6 +945,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     if (targets.length === 0) return;
 
     const finishIndex = targets.length - 1;
+    const targetCount = targets.length;
 
     const apps = await this.getLegApplications(race.legId);
     if (apps.length === 0) return;
@@ -855,7 +967,9 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     const rankedApps = apps.map((app) => {
       const appPasses = passesByApp[app.id] || [];
+      const passed = passedIndexSet(appPasses);
       const finishPass = appPasses.find((p) => p.checkpointIndex === finishIndex);
+      const missed = buildMissedCheckpoints(targets, passed);
 
       let maxCpIndex = -1;
       let maxCpElapsed = 0;
@@ -869,18 +983,26 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       const existing = resultByApp.get(app.id);
       const resultStatus = this.deriveResultStatus({
         storedStatus: String(existing?.status ?? app.status),
-        maxCpIndex,
-        finishIndex,
+        passedIndexes: passed,
+        targetCount,
         raceOver: true,
+        committeeAccepted: Boolean(existing?.committeeAccepted),
       });
+      const courseComplete = resultStatus === 'FINISHED';
 
       return {
         app,
-        finished: !!finishPass,
+        finished: courseComplete,
         finishElapsed: finishPass ? (finishPass.elapsedSeconds ?? Infinity) : Infinity,
         maxCpIndex,
         maxCpElapsed,
         resultStatus,
+        missedCheckpointIndexes: missed.map((item) => item.index),
+        dnfReason:
+          resultStatus === ApplicationStatusEnum.DNF
+            ? formatMissedCheckpointReason(missed.map((item) => item.label))
+            : null,
+        committeeAccepted: Boolean(existing?.committeeAccepted),
       };
     });
 
@@ -918,25 +1040,40 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         finishPlace += 1;
         result.status = RaceResultStatusEnum.FINISHED;
         result.finishPosition = finishPlace;
+        result.missedCheckpointIndexes = null;
+        result.dnfReason = null;
+        result.committeeAccepted = item.committeeAccepted;
       } else if (item.resultStatus === ApplicationStatusEnum.DNS) {
         result.status = RaceResultStatusEnum.DNS;
         result.finishPosition = null;
+        result.missedCheckpointIndexes = item.missedCheckpointIndexes;
+        result.dnfReason = null;
+        result.committeeAccepted = false;
+        result.committeeAcceptedAt = null;
       } else if (item.resultStatus === ApplicationStatusEnum.DSQ) {
         result.status = RaceResultStatusEnum.DSQ;
         result.finishPosition = null;
+        result.missedCheckpointIndexes = item.missedCheckpointIndexes;
+        result.dnfReason = null;
       } else if (item.resultStatus === ApplicationStatusEnum.DNF) {
         result.status = RaceResultStatusEnum.DNF;
         result.finishPosition = null;
+        result.missedCheckpointIndexes = item.missedCheckpointIndexes;
+        result.dnfReason = item.dnfReason;
+        result.committeeAccepted = false;
+        result.committeeAcceptedAt = null;
       } else {
         result.status = RaceResultStatusEnum.PENDING;
         result.finishPosition = null;
+        result.missedCheckpointIndexes = item.missedCheckpointIndexes;
+        result.dnfReason = null;
       }
 
       await this.resultsRepo.save(result);
     }
 
     const ownerId = race.leg?.createdById ?? race.createdById;
-    if (ownerId) {
+    if (notifyReferee && ownerId) {
       const referee = await this.usersRepo.findOne({ where: { id: ownerId } });
       if (referee && referee.email) {
         this.sendResultsEmail(race, referee, rankedApps).catch((e) =>
@@ -981,7 +1118,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
                 } else if (item.resultStatus === ApplicationStatusEnum.DNS) {
                   timeOrStatus = `<span style="color: #b91c1c; font-weight: 600;">DNS</span>`;
                 } else if (item.resultStatus === ApplicationStatusEnum.DNF) {
-                  timeOrStatus = `<span style="color: #c2410c; font-weight: 600;">DNF</span>`;
+                  timeOrStatus = `<span style="color: #c2410c; font-weight: 600;">${item.dnfReason || 'DNF'}</span>`;
                 } else if (item.resultStatus === ApplicationStatusEnum.DSQ) {
                   timeOrStatus = `<span style="color: #9d174d; font-weight: 600;">DSQ</span>`;
                 } else {
@@ -1125,8 +1262,10 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     const rows = sortedApps.map((app) => {
       const appPasses = passesByApp.get(app.id) ?? [];
       const passByIndex = new Map(appPasses.map((p) => [p.checkpointIndex, p]));
-      const finishPass = finishIndex >= 0 ? passByIndex.get(finishIndex) : undefined;
       const raceResult = resultByApp.get(app.id);
+      const passed = passedIndexSet(appPasses);
+      const courseComplete =
+        allCheckpointsPassed(passed, targets.length) || Boolean(raceResult?.committeeAccepted);
 
       const penaltyStatuses = [
         RaceResultStatusEnum.DNS,
@@ -1134,9 +1273,14 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         RaceResultStatusEnum.DSQ,
       ];
       let statusLabel: string;
-      if (raceResult && penaltyStatuses.includes(raceResult.status as RaceResultStatusEnum)) {
+      if (raceResult?.status === RaceResultStatusEnum.DNF) {
+        statusLabel = formatExportStatusLabel({
+          status: 'DNF',
+          dnfReason: raceResult.dnfReason,
+        });
+      } else if (raceResult && penaltyStatuses.includes(raceResult.status as RaceResultStatusEnum)) {
         statusLabel = String(raceResult.status);
-      } else if (finishPass || raceResult?.status === RaceResultStatusEnum.FINISHED) {
+      } else if (courseComplete || raceResult?.status === RaceResultStatusEnum.FINISHED) {
         statusLabel = 'FINISHED';
       } else if (app.status === ApplicationStatusEnum.PENDING) {
         statusLabel = 'WFA';
@@ -1148,12 +1292,14 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
       const checkpointCells = targets.flatMap((_cp, index) => {
         const pass = passByIndex.get(index);
-        if (!pass) return ['-', '-', '-'];
-        return [
-          this.formatPassTime(pass.passedAt),
-          this.formatElapsedClock(pass.elapsedSeconds),
-          String(crossingRankByAppAndCheckpoint.get(`${app.id}:${index}`) ?? '-'),
-        ];
+        return formatCheckpointExportCells(
+          pass,
+          crossingRankByAppAndCheckpoint.get(`${app.id}:${index}`),
+          {
+            formatPassTime: (value) => this.formatPassTime(new Date(value)),
+            formatElapsedClock: (seconds) => this.formatElapsedClock(seconds ?? null),
+          },
+        );
       });
 
       return [

@@ -1,5 +1,5 @@
-import { IsNumber, IsOptional, IsString } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsIn, IsNumber, IsOptional, IsString } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class RecordCheckpointPassDto {
   @ApiProperty({ description: 'Application ID of the racer' })
@@ -32,4 +32,9 @@ export class RecordCheckpointPassDto {
   @IsOptional()
   @IsNumber()
   crossLng?: number;
+
+  @ApiPropertyOptional({ enum: ['gps', 'committee'] })
+  @IsOptional()
+  @IsIn(['gps', 'committee'])
+  source?: 'gps' | 'committee';
 }

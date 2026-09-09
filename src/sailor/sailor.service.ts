@@ -13,6 +13,13 @@ import {
 import { computeRegistrationState, serializeRace } from '../common/utils/serialize-race';
 import { SessionUser } from '../common/decorators';
 import { resolveTrackingConfig } from '../common/tracking-config';
+import {
+  allCheckpointsPassed,
+  buildMissedCheckpoints,
+  firstUnpassedIndex,
+  formatMissedCheckpointReason,
+  passedIndexSet,
+} from '../common/checkpoint-progress';
 import { Boat } from '../entities/boat.entity';
 
 type RaceWithApplication = {
@@ -231,8 +238,6 @@ export class SailorService {
       const raceResult = resultByKey.get(`${app.id}:${race.id}`);
 
       const appPasses = passesByAppRace.get(`${app.id}:${race.id}`) || [];
-      const activeTargetIndex = appPasses.length > 0 ? Math.max(...appPasses.map(p => p.checkpointIndex)) + 1 : 0;
-
       const checkpoints =
         (courseSnapshot?.checkpoints as any[]) ??
         (race.course?.checkpoints as any[]) ??
@@ -241,7 +246,13 @@ export class SailorService {
         const k = cp.kind || cp.type;
         return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
       });
-      const hasFinished = targets.length > 0 && activeTargetIndex >= targets.length;
+      const passed = passedIndexSet(appPasses);
+      const missedCheckpoints = buildMissedCheckpoints(targets, passed);
+      const activeTargetIndex = firstUnpassedIndex(passed, targets.length);
+      const hasFinished =
+        allCheckpointsPassed(passed, targets.length) ||
+        raceResult?.status === RaceResultStatusEnum.FINISHED ||
+        Boolean(raceResult?.committeeAccepted);
 
       let elapsedSeconds = null;
       if (startedAt) {
@@ -290,6 +301,11 @@ export class SailorService {
         activeTargetIndex,
         targetCount: targets.length,
         hasFinished,
+        missedCheckpoints,
+        dnfReason:
+          resultStatus === RaceResultStatusEnum.DNF
+            ? (raceResult?.dnfReason || formatMissedCheckpointReason(missedCheckpoints.map((item) => item.label)))
+            : null,
         raceElapsedSeconds: Math.max(0, elapsedSeconds ?? 0) > 0 || elapsedSeconds === 0
           ? elapsedSeconds
           : null,
@@ -467,7 +483,7 @@ export class SailorService {
 
     const race = await this.racesRepo.findOne({
       where: { id: raceId },
-      relations: ['leg'],
+      relations: ['leg', 'course'],
     });
     if (!race?.legId) {
       return { results: null };
@@ -495,23 +511,28 @@ export class SailorService {
       (await this.applicationsRepo.count({ where: { legId: race.legId } }));
 
     const raceStartedAt = race.raceState?.startedAt as string | undefined;
-
-    const segments = passes.map((p, idx) => {
-      const prevElapsed = idx === 0 ? 0 : (passes[idx - 1].elapsedSeconds ?? 0);
-      const segmentSeconds = p.elapsedSeconds != null ? p.elapsedSeconds - prevElapsed : null;
-      return {
-        checkpointIndex: p.checkpointIndex,
-        checkpointId: p.checkpointId,
-        passedAt: p.passedAt.toISOString(),
-        elapsedSeconds: p.elapsedSeconds,
-        segmentSeconds,
-        rank: p.rank,
-      };
+    const checkpoints =
+      (race.courseSnapshot?.checkpoints as any[]) ??
+      (race.course?.checkpoints as any[]) ??
+      [];
+    const targets = checkpoints.filter((cp: any) => {
+      const k = cp.kind || cp.type;
+      return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
     });
-
-    const totalElapsed = passes.length > 0
-      ? passes[passes.length - 1].elapsedSeconds
+    const passed = passedIndexSet(passes);
+    const missedCheckpoints = buildMissedCheckpoints(targets, passed);
+    const segments = this.buildAlignedSegments(targets, passes);
+    const lastTimedPass = [...passes]
+      .filter((p) => p.elapsedSeconds != null)
+      .sort((a, b) => a.checkpointIndex - b.checkpointIndex);
+    const totalElapsed = lastTimedPass.length
+      ? lastTimedPass[lastTimedPass.length - 1].elapsedSeconds
       : null;
+    const status = raceResult?.status ?? app.status;
+    const dnfReason =
+      status === RaceResultStatusEnum.DNF
+        ? (raceResult?.dnfReason || formatMissedCheckpointReason(missedCheckpoints.map((item) => item.label)))
+        : null;
 
     return {
       results: {
@@ -525,7 +546,9 @@ export class SailorService {
         raceStartedAt: raceStartedAt ?? null,
         totalElapsedSeconds: totalElapsed,
         segments,
-        status: raceResult?.status ?? app.status,
+        missedCheckpoints,
+        dnfReason,
+        status,
       },
     };
   }
@@ -615,35 +638,51 @@ export class SailorService {
       return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
     });
     const totalCheckpoints = targets.length;
-    const finishIndex = totalCheckpoints > 0 ? totalCheckpoints - 1 : -1;
+    const raceOver =
+      race.status === RaceStatusEnum.FINISHED || race.status === RaceStatusEnum.CANCELLED;
 
     const leaderboard = applications.map((app, index) => {
       const raceResult = resultByApp.get(app.id);
       const finishPosition = raceResult?.finishPosition ?? null;
       const fleetSize = raceResult?.fleetSize ?? null;
       const appPasses = passesByApp.get(app.id) ?? [];
-      const lastPass = appPasses.length > 0
-        ? appPasses.reduce((latest, p) => (p.checkpointIndex > latest.checkpointIndex ? p : latest), appPasses[0])
+      const passed = passedIndexSet(appPasses);
+      const missedCheckpoints = buildMissedCheckpoints(targets, passed);
+      const lastTimedPasses = appPasses
+        .filter((p) => p.elapsedSeconds != null)
+        .sort((a, b) => a.checkpointIndex - b.checkpointIndex);
+      const totalElapsedSeconds = lastTimedPasses.length
+        ? lastTimedPasses[lastTimedPasses.length - 1].elapsedSeconds
         : null;
-      const totalElapsedSeconds = lastPass?.elapsedSeconds ?? null;
-      const maxCpIndex = lastPass?.checkpointIndex ?? -1;
       const checkpointsReached = appPasses.length;
       const isFinished =
-        (finishIndex >= 0 && maxCpIndex === finishIndex) ||
-        finishPosition != null ||
-        raceResult?.status === RaceResultStatusEnum.FINISHED;
+        allCheckpointsPassed(passed, totalCheckpoints) ||
+        raceResult?.status === RaceResultStatusEnum.FINISHED ||
+        Boolean(raceResult?.committeeAccepted);
 
       let status: string = raceResult?.status ?? app.status;
       if (isFinished && (status === ApplicationStatusEnum.APPROVED || status === ApplicationStatusEnum.CHECKED_IN || status === RaceResultStatusEnum.PENDING)) {
         status = 'FINISHED';
+      } else if (
+        raceOver &&
+        status !== RaceResultStatusEnum.DNS &&
+        status !== RaceResultStatusEnum.DSQ &&
+        status !== ApplicationStatusEnum.WITHDRAWN &&
+        status !== ApplicationStatusEnum.PENDING &&
+        !isFinished
+      ) {
+        if (passed.has(0)) status = RaceResultStatusEnum.DNF;
+        else if (status !== RaceResultStatusEnum.DNF) status = RaceResultStatusEnum.DNS;
       }
 
       const displayPosition = finishPosition ?? (index + 1);
+      const segments = this.buildAlignedSegments(targets, appPasses);
 
       return {
         rank: displayPosition,
         applicationId: app.id,
         name: app.name,
+        competitorName: app.name,
         boatName: app.boatName,
         sailNumber: app.sailNumber,
         club: app.club,
@@ -654,6 +693,12 @@ export class SailorService {
         totalCheckpoints,
         isFinished,
         status,
+        dnfReason:
+          status === RaceResultStatusEnum.DNF
+            ? (raceResult?.dnfReason || formatMissedCheckpointReason(missedCheckpoints.map((item) => item.label)))
+            : null,
+        missedCheckpoints,
+        segments,
         isMe: app.email === email,
       };
     });
@@ -676,5 +721,42 @@ export class SailorService {
       total: leaderboard.length,
       leaderboard,
     };
+  }
+
+  private buildAlignedSegments(targets: any[], passes: CheckpointPass[]) {
+    const passByIndex = new Map(passes.map((p) => [p.checkpointIndex, p]));
+    return targets.map((cp, index) => {
+      const pass = passByIndex.get(index);
+      if (!pass) {
+        return {
+          checkpointIndex: index,
+          checkpointId: cp?.id ?? `CP${index}`,
+          checkpointName: typeof cp?.name === 'string' ? cp.name : null,
+          passedAt: null,
+          elapsedSeconds: null,
+          segmentSeconds: null,
+          rank: null,
+          passed: false,
+          source: null,
+        };
+      }
+      const prev = index === 0 ? null : passByIndex.get(index - 1);
+      const prevElapsed = index === 0 ? 0 : (prev?.elapsedSeconds ?? null);
+      const segmentSeconds =
+        pass.elapsedSeconds != null && prevElapsed != null
+          ? pass.elapsedSeconds - prevElapsed
+          : null;
+      return {
+        checkpointIndex: index,
+        checkpointId: pass.checkpointId || cp?.id || `CP${index}`,
+        checkpointName: typeof cp?.name === 'string' ? cp.name : null,
+        passedAt: pass.passedAt.toISOString(),
+        elapsedSeconds: pass.elapsedSeconds,
+        segmentSeconds,
+        rank: pass.rank,
+        passed: true,
+        source: pass.source ?? 'gps',
+      };
+    });
   }
 }

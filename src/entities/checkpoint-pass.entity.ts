@@ -51,6 +51,10 @@ export class CheckpointPass {
   @Column({ name: 'cross_lng', type: 'double precision', nullable: true })
   crossLng!: number | null;
 
+  /** gps = engine detection; committee = hakem onayı */
+  @Column({ type: 'text', default: 'gps' })
+  source!: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

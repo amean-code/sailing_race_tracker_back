@@ -16,6 +16,7 @@ import { RaceFleetService } from './race-fleet.service';
 import { CreateRaceDto, RaceApplicationDto, UpdateRaceDto, RaceActionDto } from './dto/race.dto';
 import { CheckInDto } from './dto/check-in.dto';
 import { RecordCheckpointPassDto } from './dto/checkpoint-pass.dto';
+import { ReviewRaceResultDto } from './dto/review-race-result.dto';
 import { CurrentUser, Public, Roles, SessionUser } from '../common/decorators';
 import { AUTH_COOKIE } from '../common/constants';
 
@@ -153,6 +154,19 @@ export class RacesController {
     @CurrentUser() user: SessionUser,
   ) {
     return this.racesService.recordCheckpointPass(id, dto, user);
+  }
+
+  @Post(':id/results/:applicationId/review')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Hakem: eksik checkpointi geçti say, GPS geçişini iptal et veya DNF yarışını kabul et' })
+  async reviewRaceResult(
+    @Param('id') id: string,
+    @Param('applicationId') applicationId: string,
+    @Body() dto: ReviewRaceResultDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    return this.racesService.reviewRaceResult(id, applicationId, dto, user);
   }
 
   @Public()
