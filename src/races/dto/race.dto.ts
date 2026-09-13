@@ -213,6 +213,11 @@ export class RaceApplicationDto {
   @MinLength(1)
   sailNumber!: string;
 
+  @ApiProperty({ description: 'Başvuranın mevcut tekne kaydı (zorunlu)' })
+  @IsString()
+  @MinLength(1)
+  boatId!: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

@@ -142,36 +142,52 @@ export class ApplicationsService {
   }
 
   private async ensureBoatForApproval(app: RaceApplication, user?: SessionUser) {
-    let boat = await this.boatsRepo.findOne({ where: { applicationId: app.id } });
-    if (boat) return boat;
+    if (!app.boatId) {
+      throw new BadRequestException(
+        'Başvuruya bağlı tekne yok. Sistem otomatik tekne oluşturmaz; yarışçı mevcut teknesiyle başvurmalıdır.',
+      );
+    }
+
+    const boat = await this.boatsRepo.findOne({
+      where: { id: app.boatId, isActive: true },
+    });
+    if (!boat) {
+      throw new BadRequestException('Başvurudaki tekne bulunamadı veya silinmiş');
+    }
 
     const race = await this.firstRaceForLeg(app.legId);
     if (!race) {
-      throw new BadRequestException('Bu ayak altında tekne oluşturmak için en az bir yarış gerekli');
+      throw new BadRequestException('Bu ayak altında en az bir yarış gerekli');
     }
 
     const existingCount = await this.boatsRepo.count({
       where: { raceId: race.id, status: 'registered' },
     });
 
-    boat = this.boatsRepo.create({
-      name: app.boatName,
-      sailNumber: app.sailNumber,
-      competitorName: app.name,
-      applicationId: app.id,
-      raceId: race.id,
-      courseId: race.courseId ?? null,
-      status: 'registered',
-      displayColor: this.pickColor(existingCount),
-      crewMembers: app.crewMembers ?? null,
-    });
+    // Mevcut tekniyi yarışa bağla — yeni kayıt oluşturma
+    boat.applicationId = app.id;
+    boat.raceId = race.id;
+    boat.courseId = race.courseId ?? null;
+    boat.status = 'registered';
+    if (!boat.displayColor) {
+      boat.displayColor = this.pickColor(existingCount);
+    }
+    if (!boat.userId && app.userId) {
+      boat.userId = app.userId;
+    }
+    if (!boat.competitorName) {
+      boat.competitorName = app.name;
+    }
+    if (app.crewMembers?.length) {
+      boat.crewMembers = app.crewMembers;
+    }
+
     await this.boatsRepo.save(boat);
-    app.boatId = boat.id;
     app.checkedInAt = new Date();
     this.eventEmitter.emit('boat.checked_in', {
       raceId: race.id,
       boatId: boat.id,
-      userId: user?.sub,
+      userId: user?.sub ?? app.userId ?? undefined,
     });
     return boat;
   }

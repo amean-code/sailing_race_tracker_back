@@ -139,37 +139,38 @@ export class RaceFleetService {
     });
     if (!app) throw new NotFoundException('Başvuru bulunamadı');
 
-    if (app.status === ApplicationStatusEnum.APPROVED && app.boat) {
-      return {
-        application: this.serializeApplication(app),
-        boat: this.serializeBoat(app.boat),
-      };
+    if (app.status !== ApplicationStatusEnum.APPROVED && app.status !== ApplicationStatusEnum.CHECKED_IN) {
+      throw new BadRequestException('Yarışa dahil olmak için başvurunun onaylanmış olması gerekir');
     }
 
-    if (app.status !== ApplicationStatusEnum.APPROVED) {
-      throw new BadRequestException('Yarışa dahil olmak için başvurunun onaylanmış olması gerekir');
+    let boat = app.boat;
+    if (!boat && app.boatId) {
+      boat = await this.boatsRepo.findOne({
+        where: { id: app.boatId, isActive: true },
+      });
+    }
+    if (!boat || boat.isActive === false) {
+      throw new BadRequestException(
+        'Başvuruya bağlı tekne yok veya silinmiş. Sistem otomatik tekne oluşturmaz.',
+      );
     }
 
     const existingCount = await this.applicationsRepo.count({
       where: { legId: race.legId!, status: ApplicationStatusEnum.APPROVED },
     });
 
-    let boat = app.boat;
-    if (!boat) {
-      boat = this.boatsRepo.create({
-        name: app.boatName,
-        sailNumber: app.sailNumber,
-        competitorName: app.name,
-        applicationId: app.id,
-        raceId,
-        courseId: race.courseId ?? null,
-        status: 'registered',
-        displayColor: this.pickColor(existingCount),
-      });
-      boat = await this.boatsRepo.save(boat);
+    boat.applicationId = app.id;
+    boat.raceId = raceId;
+    boat.courseId = race.courseId ?? null;
+    boat.status = 'registered';
+    if (!boat.displayColor) {
+      boat.displayColor = this.pickColor(existingCount);
     }
+    if (!boat.userId && app.userId) {
+      boat.userId = app.userId;
+    }
+    await this.boatsRepo.save(boat);
 
-    app.status = ApplicationStatusEnum.APPROVED;
     app.boatId = boat.id;
     app.checkedInAt = new Date();
     await this.applicationsRepo.save(app);

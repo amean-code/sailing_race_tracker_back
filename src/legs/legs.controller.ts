@@ -96,13 +96,14 @@ export class LegsController {
     return { race };
   }
 
-  @Public()
   @Post(':id/applications')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('SAILOR', 'COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
   @ApiOperation({ summary: 'Ayağa başvuru yap' })
   async submitApplication(
     @Param('id') id: string,
     @Body() dto: RaceApplicationDto,
-    @CurrentUser() user: SessionUser | undefined,
+    @CurrentUser() user: SessionUser,
   ) {
     const application = await this.legsService.submitApplication(id, dto, user);
     return { application };

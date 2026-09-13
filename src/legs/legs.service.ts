@@ -10,6 +10,7 @@ import { In, Repository } from 'typeorm';
 import { Leg } from '../entities/leg.entity';
 import { Race } from '../entities/race.entity';
 import { RaceApplication } from '../entities/race-application.entity';
+import { Boat } from '../entities/boat.entity';
 import { Trophy } from '../entities/trophy.entity';
 import { User } from '../entities/user.entity';
 import {
@@ -40,6 +41,8 @@ export class LegsService {
     private readonly racesRepo: Repository<Race>,
     @InjectRepository(RaceApplication)
     private readonly applicationsRepo: Repository<RaceApplication>,
+    @InjectRepository(Boat)
+    private readonly boatsRepo: Repository<Boat>,
     @InjectRepository(Trophy)
     private readonly trophiesRepo: Repository<Trophy>,
     @InjectRepository(User)
@@ -457,13 +460,34 @@ export class LegsService {
     return this.withRaces({ ...saved, trophy } as Leg);
   }
 
-  async submitApplication(legId: string, dto: RaceApplicationDto, user?: SessionUser) {
+  async submitApplication(legId: string, dto: RaceApplicationDto, user: SessionUser) {
     const leg = await this.legsRepo.findOne({ where: { id: legId } });
     if (!leg) throw new NotFoundException('Ayak bulunamadı');
 
     const enriched = await this.withRaces(leg);
     if (!enriched.registrationOpen) {
       throw new BadRequestException('Bu ayak için kayıt kapatılmış');
+    }
+
+    if (!user?.sub) {
+      throw new BadRequestException('Başvuru için oturum açmanız gerekir');
+    }
+
+    const boatId = dto.boatId?.trim();
+    if (!boatId) {
+      throw new BadRequestException('Başvuru için mevcut bir tekne seçilmelidir');
+    }
+
+    const boat = await this.boatsRepo.findOne({ where: { id: boatId, isActive: true } });
+    if (!boat) {
+      throw new NotFoundException('Seçilen tekne bulunamadı veya silinmiş');
+    }
+    if (boat.userId && boat.userId !== user.sub) {
+      throw new ForbiddenException('Bu tekne size ait değil');
+    }
+    if (!boat.userId) {
+      boat.userId = user.sub;
+      await this.boatsRepo.save(boat);
     }
 
     const email = dto.email.toLowerCase();
@@ -479,12 +503,13 @@ export class LegsService {
       name: dto.name,
       email,
       phone: dto.phone ?? null,
-      boatName: dto.boatName,
-      sailNumber: dto.sailNumber,
+      boatName: dto.boatName?.trim() || boat.name,
+      sailNumber: dto.sailNumber?.trim() || boat.sailNumber || '',
+      boatId: boat.id,
       club: dto.club ?? null,
       notes: dto.notes ?? null,
-      crewMembers: dto.crewMembers ?? null,
-      userId: user?.sub ?? null,
+      crewMembers: dto.crewMembers ?? boat.crewMembers ?? null,
+      userId: user.sub,
     });
     const saved = await this.applicationsRepo.save(application);
 
