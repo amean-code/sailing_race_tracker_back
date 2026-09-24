@@ -481,21 +481,44 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         }
       }
     }
+    if (dto.raceState !== undefined) {
+      race.raceState = this.mergeRaceState(race.raceState, dto.raceState);
+    }
+
+    let courseSnapshotChanged = false;
     if (dto.courseId !== undefined) {
       if (dto.courseId) {
         const course = await this.coursesRepo.findOne({ where: { id: dto.courseId } });
         if (!course) throw new NotFoundException('Seçilen parkur bulunamadı.');
       }
+      const previousCourseId = race.courseId;
       race.courseId = dto.courseId ?? null;
+      // Clear the loaded relation so TypeORM save does not write the old FK back.
+      (race as Race & { course?: Course | null }).course = null;
+      // Changing the active course invalidates a stale snapshot (race control
+      // would otherwise keep showing the old layout).
+      if (dto.courseSnapshot === undefined && race.courseId !== previousCourseId) {
+        if (race.status === RaceStatusEnum.IN_PROGRESS && race.courseId) {
+          const courseForSnapshot = await this.coursesRepo.findOne({
+            where: { id: race.courseId },
+          });
+          race.courseSnapshot = courseForSnapshot
+            ? JSON.parse(JSON.stringify(courseForSnapshot))
+            : null;
+          courseSnapshotChanged = true;
+        } else {
+          race.courseSnapshot = null;
+          courseSnapshotChanged = true;
+        }
+      }
     }
     if (dto.courseIds !== undefined) {
-      race.courseIds = dto.courseIds ?? [];
+      race.courseIds = (dto.courseIds ?? []).filter(Boolean);
+      // Admin pool assignment: if no active course yet and a single course was assigned, link it.
+      if (dto.courseId === undefined && !race.courseId && race.courseIds.length === 1) {
+        race.courseId = race.courseIds[0];
+      }
     }
-    if (dto.raceState !== undefined) {
-      race.raceState = this.mergeRaceState(race.raceState, dto.raceState);
-    }
-    
-    let courseSnapshotChanged = false;
     if (dto.courseSnapshot !== undefined) {
       race.courseSnapshot = dto.courseSnapshot;
       courseSnapshotChanged = true;

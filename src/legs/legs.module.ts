@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Leg } from '../entities/leg.entity';
 import { Race } from '../entities/race.entity';
+import { Course } from '../entities/course.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Boat } from '../entities/boat.entity';
 import { Trophy } from '../entities/trophy.entity';
@@ -14,7 +15,7 @@ import { RaceResult } from '../entities/race-result.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Leg, Race, RaceApplication, Boat, Trophy, User, RaceResult]),
+    TypeOrmModule.forFeature([Leg, Race, Course, RaceApplication, Boat, Trophy, User, RaceResult]),
     NotificationsModule,
   ],
   controllers: [LegsController],

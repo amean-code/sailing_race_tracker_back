@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Leg } from '../entities/leg.entity';
+import { Course } from '../entities/course.entity';
 import { Race } from '../entities/race.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Boat } from '../entities/boat.entity';
@@ -39,6 +40,8 @@ export class LegsService {
     private readonly legsRepo: Repository<Leg>,
     @InjectRepository(Race)
     private readonly racesRepo: Repository<Race>,
+    @InjectRepository(Course)
+    private readonly coursesRepo: Repository<Course>,
     @InjectRepository(RaceApplication)
     private readonly applicationsRepo: Repository<RaceApplication>,
     @InjectRepository(Boat)
@@ -83,6 +86,21 @@ export class LegsService {
       relations: ['course'],
       order: { raceOrder: 'ASC', startDate: 'ASC', createdAt: 'ASC' },
     });
+
+    // Admin assigns courses to courseIds (pool). If active courseId is empty,
+    // hydrate preview from the first pool course so the committee panel is not blank.
+    await Promise.all(
+      races.map(async (race) => {
+        if (race.course || !race.courseIds?.length) return;
+        const poolCourse = await this.coursesRepo.findOne({
+          where: { id: race.courseIds[0] },
+        });
+        if (poolCourse) {
+          (race as Race & { course: Course | null }).course = poolCourse;
+        }
+      }),
+    );
+
     const applicationCount = await this.applicationsRepo.count({ where: { legId: leg.id } });
     return serializeLeg({
       ...leg,
@@ -157,6 +175,7 @@ export class LegsService {
     createdById: string,
     raceOrder: number,
   ) {
+    const courseIds = Array.isArray(dto.courseIds) ? dto.courseIds.filter(Boolean) : [];
     const race = this.racesRepo.create({
       title: dto.title?.trim() || this.defaultRaceTitle(raceOrder),
       description: dto.description ?? null,
@@ -165,8 +184,9 @@ export class LegsService {
       status: dto.status ?? RaceStatusEnum.OPEN,
       legId: leg.id,
       raceOrder,
-      courseId: null,
-      courseIds: Array.isArray(dto.courseIds) ? dto.courseIds.filter(Boolean) : [],
+      // Single assigned course becomes the active link; multi-course pool is chosen at start.
+      courseId: courseIds.length === 1 ? courseIds[0] : null,
+      courseIds,
       raceState: dto.raceState ?? {},
       createdById,
     });

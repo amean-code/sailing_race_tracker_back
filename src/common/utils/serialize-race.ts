@@ -113,8 +113,8 @@ function serializeCourse(course: CourseLike) {
     id: course.id,
     name: course.name,
     checkpoints: course.checkpoints,
-    createdAt: course.createdAt.toISOString(),
-    updatedAt: course.updatedAt.toISOString(),
+    createdAt: toDate(course.createdAt).toISOString(),
+    updatedAt: toDate(course.updatedAt).toISOString(),
   };
 }
 

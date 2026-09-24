@@ -11,6 +11,7 @@ import {
 } from '../common/utils/course-storage-name';
 
 import { Race } from '../entities/race.entity';
+import { Leg } from '../entities/leg.entity';
 
 /** Build a unique course name by appending (1), (2), … when needed. */
 export function nextUniqueCourseName(desiredName: string, takenNames: Iterable<string>): string {
@@ -36,6 +37,8 @@ export class CoursesService {
   constructor(
     @InjectRepository(Course)
     private readonly coursesRepo: Repository<Course>,
+    @InjectRepository(Race)
+    private readonly racesRepo: Repository<Race>,
   ) { }
 
   serialize(course: Course & { raceCount?: number }) {
@@ -102,12 +105,46 @@ export class CoursesService {
       ];
     }
 
-    const course = await this.coursesRepo.findOne({
+    let course = await this.coursesRepo.findOne({
       where,
       relations: ['createdBy', 'races'],
     });
+
+    // Allow reading courses assigned to this referee via race courseId / courseIds,
+    // even when the course is inactive or owned by someone else.
+    if (!course && user?.role === UserRoleEnum.COMMITTEE) {
+      const assigned = await this.isCourseAssignedToCommittee(id, user.sub);
+      if (assigned) {
+        course = await this.coursesRepo.findOne({
+          where: { id },
+          relations: ['createdBy', 'races'],
+        });
+      }
+    }
+
     if (!course) throw new NotFoundException('Parkur bulunamadı veya erişim izniniz yok');
     return this.serialize(course);
+  }
+
+  /** True if the course is linked to a leg/race assigned to this committee member. */
+  private async isCourseAssignedToCommittee(courseId: string, committeeId: string) {
+    const byActiveLink = await this.racesRepo
+      .createQueryBuilder('race')
+      .innerJoin(Leg, 'leg', 'leg.id = race.leg_id')
+      .where('leg.assigned_committee_id = :committeeId', { committeeId })
+      .andWhere('race.course_id = :courseId', { courseId })
+      .getCount();
+    if (byActiveLink > 0) return true;
+
+    const byPool = await this.racesRepo
+      .createQueryBuilder('race')
+      .innerJoin(Leg, 'leg', 'leg.id = race.leg_id')
+      .where('leg.assigned_committee_id = :committeeId', { committeeId })
+      .andWhere('race.course_ids @> :courseIdJson::jsonb', {
+        courseIdJson: JSON.stringify([courseId]),
+      })
+      .getCount();
+    return byPool > 0;
   }
 
   async create(dto: CreateCourseDto, user?: SessionUser) {

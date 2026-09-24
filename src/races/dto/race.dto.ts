@@ -10,6 +10,7 @@ import {
   Max,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { RaceStatusEnum, RaceTypeEnum } from '../../common/constants';
 
@@ -184,8 +185,9 @@ export class UpdateRaceDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @ValidateIf((_, value) => value !== null)
   @IsObject()
-  courseSnapshot?: Record<string, unknown>;
+  courseSnapshot?: Record<string, unknown> | null;
 }
 
 export class RaceApplicationDto {
