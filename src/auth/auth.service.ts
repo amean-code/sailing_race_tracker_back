@@ -92,9 +92,6 @@ export class AuthService {
   }
 
   private assertUserCanAccess(user: User) {
-    if (user.role === UserRoleEnum.SAILOR && user.status === UserStatusEnum.PENDING) {
-      return;
-    }
     if (user.status !== UserStatusEnum.APPROVED) {
       throw new UnauthorizedException(getBlockedAccountMessage(user.status));
     }
@@ -120,13 +117,16 @@ export class AuthService {
       throw new ConflictException('Bu e-posta zaten kayıtlı');
     }
 
+    const role = (dto.role as UserRoleEnum) ?? UserRoleEnum.SAILOR;
     const user = this.usersRepo.create({
       email: dto.email,
       passwordHash: await bcrypt.hash(dto.password, SALT_ROUNDS),
       name: dto.name ?? null,
-      role: (dto.role as UserRoleEnum) ?? UserRoleEnum.SAILOR,
+      role,
       status:
-        dto.role === UserRoleEnum.ADMIN || dto.role === UserRoleEnum.SUPER_ADMIN
+        role === UserRoleEnum.SAILOR ||
+        role === UserRoleEnum.ADMIN ||
+        role === UserRoleEnum.SUPER_ADMIN
           ? UserStatusEnum.APPROVED
           : UserStatusEnum.PENDING,
     });
@@ -135,7 +135,7 @@ export class AuthService {
       userName: saved.name ?? undefined,
       userEmail: saved.email,
     });
-    const canLogin = saved.status === UserStatusEnum.APPROVED || (saved.role === UserRoleEnum.SAILOR && saved.status === UserStatusEnum.PENDING);
+    const canLogin = saved.status === UserStatusEnum.APPROVED;
     return { user: this.toPublicUser(saved), token: canLogin ? this.createToken(saved) : undefined };
   }
 
