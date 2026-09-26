@@ -388,13 +388,12 @@ export class SailorService {
     const completed = registered
       .filter((entry) => {
         const status = String(entry.race.status).toLowerCase();
-        const isRaceFinished = status === 'finished';
+        const isRaceFinished = status === 'finished' || status === 'cancelled';
         const isPastEndDate = entry.race.endDate && new Date(entry.race.endDate) < now;
 
         const entryPasses = passes.filter(
           (p) => p.applicationId === entry.application.id && p.raceId === entry.race.id,
         );
-        const maxCp = entryPasses.length > 0 ? Math.max(...entryPasses.map(p => p.checkpointIndex)) : -1;
         const checkpoints =
           (entry.race.courseSnapshot?.checkpoints as any[]) ??
           (entry.race.course?.checkpoints as any[]) ??
@@ -403,8 +402,31 @@ export class SailorService {
           const k = cp.kind || cp.type;
           return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
         });
-        const totalCps = targets.length;
-        const isSailorFinished = totalCps > 0 && maxCp >= totalCps - 1;
+        const passed = passedIndexSet(entryPasses);
+        const isSailorFinished =
+          allCheckpointsPassed(passed, targets.length) ||
+          entry.application.status === RaceResultStatusEnum.FINISHED;
+
+        if (isSailorFinished) {
+          const appStatus = String(entry.application.status).toUpperCase();
+          if (
+            appStatus === ApplicationStatusEnum.APPROVED ||
+            appStatus === ApplicationStatusEnum.CHECKED_IN ||
+            appStatus === RaceResultStatusEnum.PENDING
+          ) {
+            entry.application.status = RaceResultStatusEnum.FINISHED;
+          }
+        } else if (isRaceFinished) {
+          const appStatus = String(entry.application.status).toUpperCase();
+          if (
+            appStatus === ApplicationStatusEnum.APPROVED ||
+            appStatus === ApplicationStatusEnum.CHECKED_IN
+          ) {
+            entry.application.status = passed.has(0)
+              ? RaceResultStatusEnum.DNF
+              : RaceResultStatusEnum.DNS;
+          }
+        }
 
         return isRaceFinished || isPastEndDate || isSailorFinished;
       })
@@ -528,7 +550,37 @@ export class SailorService {
     const totalElapsed = lastTimedPass.length
       ? lastTimedPass[lastTimedPass.length - 1].elapsedSeconds
       : null;
-    const status = raceResult?.status ?? app.status;
+    const isFinished =
+      allCheckpointsPassed(passed, targets.length) ||
+      raceResult?.status === RaceResultStatusEnum.FINISHED ||
+      Boolean(raceResult?.committeeAccepted);
+
+    let status: string = raceResult?.status ?? app.status;
+    if (
+      isFinished &&
+      (status === ApplicationStatusEnum.APPROVED ||
+        status === ApplicationStatusEnum.CHECKED_IN ||
+        status === RaceResultStatusEnum.PENDING)
+    ) {
+      status = RaceResultStatusEnum.FINISHED;
+    }
+
+    const raceOver =
+      race.status === RaceStatusEnum.FINISHED || race.status === RaceStatusEnum.CANCELLED;
+    if (
+      raceOver &&
+      !isFinished &&
+      status !== RaceResultStatusEnum.DNS &&
+      status !== RaceResultStatusEnum.DSQ &&
+      status !== ApplicationStatusEnum.WITHDRAWN &&
+      status !== ApplicationStatusEnum.PENDING
+    ) {
+      if (passed.has(0)) status = RaceResultStatusEnum.DNF;
+      else if (status === ApplicationStatusEnum.APPROVED || status === ApplicationStatusEnum.CHECKED_IN) {
+        status = RaceResultStatusEnum.DNS;
+      }
+    }
+
     const dnfReason =
       status === RaceResultStatusEnum.DNF
         ? (raceResult?.dnfReason || formatMissedCheckpointReason(missedCheckpoints.map((item) => item.label)))
@@ -549,6 +601,7 @@ export class SailorService {
         missedCheckpoints,
         dnfReason,
         status,
+        isFinished,
       },
     };
   }

@@ -148,6 +148,12 @@ export class AuthService {
     if (!valid) {
       throw new UnauthorizedException('E-posta veya şifre hatalı');
     }
+
+    // Yarışçılarda hesap onayı yok; eski PENDING kayıtları otomatik onayla
+    if (user.role === UserRoleEnum.SAILOR && user.status === UserStatusEnum.PENDING) {
+      user.status = UserStatusEnum.APPROVED;
+    }
+
     this.assertUserCanAccess(user);
     
     // Single active session check for SAILOR

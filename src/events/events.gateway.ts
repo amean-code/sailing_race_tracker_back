@@ -64,6 +64,13 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  @OnEvent('race.countdown.started')
+  handleRaceCountdownStarted(payload: any) {
+    if (payload.raceId) {
+      this.server.to(payload.raceId).emit('race.countdown.started', payload);
+    }
+  }
+
   @OnEvent('boat.position.updated')
   handleBoatPositionUpdated(payload: any) {
     if (payload.raceId) {

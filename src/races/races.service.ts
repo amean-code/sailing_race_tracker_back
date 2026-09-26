@@ -124,6 +124,37 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     return merged;
   }
 
+  /** Mark pre-start GPS collection active when countdown is armed. */
+  private activatePreStartTracking(
+    state: Record<string, unknown>,
+    scheduledStartAt: string,
+  ): Record<string, unknown> {
+    const tracking = {
+      ...((state.tracking as Record<string, unknown>) || {}),
+      preStartActive: true,
+      activatedAt: scheduledStartAt,
+    };
+    return { ...state, tracking };
+  }
+
+  /** Clear pre-start tracking flags (countdown cancelled or race started). */
+  private clearPreStartTracking(
+    state: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const tracking = {
+      ...((state.tracking as Record<string, unknown>) || {}),
+    };
+    delete tracking.preStartActive;
+    delete tracking.activatedAt;
+    const next = { ...state };
+    if (Object.keys(tracking).length === 0) {
+      delete next.tracking;
+    } else {
+      next.tracking = tracking;
+    }
+    return next;
+  }
+
   private emitRaceUpdated(race: Race, applicationCount?: number) {
     const serialized = serializeRace({
       ...race,
@@ -185,9 +216,10 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    const state = { ...(fresh.raceState || {}) };
+    let state = { ...(fresh.raceState || {}) };
     state.startedAt = startedAt;
     delete state.scheduledStartAt;
+    state = this.clearPreStartTracking(state);
     fresh.raceState = state;
 
     const saved = await this.racesRepo.save(fresh);
@@ -375,6 +407,89 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     race.status = nextStatus;
   }
 
+  /**
+   * Close an IN_PROGRESS race and finalize results.
+   * Finishers keep FINISHED; boats that started but missed marks become DNF; never-started → DNS.
+   * Used by referee "finish" and by auto-finish when the last boat completes the course.
+   */
+  async closeRaceAsFinished(
+    raceId: string,
+    opts: { userId?: string | null; notifyReferee?: boolean } = {},
+  ): Promise<Race | null> {
+    const race = await this.loadRace(raceId);
+    if (race.status !== RaceStatusEnum.IN_PROGRESS) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    const state = { ...(race.raceState || {}) };
+    state.finishedAt = now;
+    if (state.startedAt) {
+      state.durationSeconds = Math.floor(
+        (new Date(now).getTime() - new Date(state.startedAt as string).getTime()) / 1000,
+      );
+    }
+    race.status = RaceStatusEnum.FINISHED;
+    race.raceState = state;
+
+    await this.racesRepo.save(race);
+    await this.finalizeRaceResults(race.id, { notifyReferee: opts.notifyReferee !== false });
+
+    const saved = await this.loadRace(raceId);
+    this.emitRaceUpdated(saved);
+    this.eventEmitter.emit('race.finished', {
+      raceId: saved.id,
+      userId: opts.userId ?? null,
+    });
+    return saved;
+  }
+
+  /**
+   * When every approved/checked-in boat has completed all race targets, close the race.
+   * The first boat finishing must NOT end the race — only the last unfinished boat's finish does.
+   */
+  async tryAutoFinishWhenFleetComplete(raceId: string): Promise<boolean> {
+    const race = await this.loadRace(raceId);
+    if (race.status !== RaceStatusEnum.IN_PROGRESS || !race.legId) {
+      return false;
+    }
+
+    const targets = this.getRaceTargets(race);
+    if (targets.length === 0) return false;
+
+    const apps = await this.applicationsRepo.find({
+      where: {
+        legId: race.legId,
+        status: In([
+          ApplicationStatusEnum.APPROVED,
+          ApplicationStatusEnum.CHECKED_IN,
+        ]),
+      },
+    });
+    if (apps.length === 0) return false;
+
+    const allPasses = await this.checkpointPassRepo.find({ where: { raceId } });
+    const passesByApp = new Map<string, CheckpointPass[]>();
+    for (const pass of allPasses) {
+      if (!passesByApp.has(pass.applicationId)) {
+        passesByApp.set(pass.applicationId, []);
+      }
+      passesByApp.get(pass.applicationId)!.push(pass);
+    }
+
+    const fleetComplete = apps.every((app) => {
+      const passed = passedIndexSet(passesByApp.get(app.id) ?? []);
+      return allCheckpointsPassed(passed, targets.length);
+    });
+    if (!fleetComplete) return false;
+
+    this.logger.log(
+      `Race ${raceId}: all ${apps.length} boat(s) finished course — auto-closing race`,
+    );
+    const closed = await this.closeRaceAsFinished(raceId, { userId: null });
+    return Boolean(closed);
+  }
+
   async handleRaceAction(id: string, dto: RaceActionDto, user: SessionUser) {
     const race = await this.loadRace(id);
 
@@ -386,18 +501,11 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     const { action, reason } = dto;
 
     if (action === 'finish') {
-      race.status = RaceStatusEnum.FINISHED;
-      
-      const now = new Date().toISOString();
-      const state = { ...(race.raceState || {}) };
-      state.finishedAt = now;
-      if (state.startedAt) {
-        state.durationSeconds = Math.floor((new Date(now).getTime() - new Date(state.startedAt as string).getTime()) / 1000);
+      const closed = await this.closeRaceAsFinished(id, { userId: user.sub });
+      if (!closed) {
+        throw new BadRequestException('Yarış yalnızca devam ederken bitirilebilir');
       }
-      race.raceState = state;
-      
-      await this.racesRepo.save(race);
-      await this.finalizeRaceResults(race.id);
+      return this.findOne(id);
     } else if (action === 'abandon') {
       race.status = RaceStatusEnum.CANCELLED;
       if (!race.title.startsWith('TAMAMLANAMAYAN ')) {
@@ -415,7 +523,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       await this.finalizeRaceResults(race.id);
     } else if (action === 'restart') {
       race.status = RaceStatusEnum.OPEN;
-      const state = { ...(race.raceState || {}) };
+      let state = { ...(race.raceState || {}) };
       delete state.startedAt;
       delete state.statusBeforeSuspend;
       delete state.statusBeforeClose;
@@ -424,6 +532,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       delete state.durationSeconds;
       delete state.scheduledStartAt;
       state.restartReason = reason;
+      state = this.clearPreStartTracking(state);
       race.raceState = state;
 
       await this.racesRepo.save(race);
@@ -437,12 +546,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     const saved = await this.loadRace(id);
     this.emitRaceUpdated(saved);
-    if (action === 'finish') {
-      this.eventEmitter.emit('race.finished', {
-        raceId: saved.id,
-        userId: user.sub,
-      });
-    } else if (action === 'abandon') {
+    if (action === 'abandon') {
       this.eventEmitter.emit('race.cancelled', {
         raceId: saved.id,
         userId: user.sub,
@@ -461,6 +565,12 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     this.assertCommitteeNotEditingMetadata(dto, user);
 
     const previousStatus = race.status;
+    const previousScheduledStartAt =
+      typeof race.raceState?.scheduledStartAt === 'string'
+        ? race.raceState.scheduledStartAt
+        : null;
+    let countdownStarted = false;
+    let countdownScheduledAt: string | null = null;
 
     if (dto.title !== undefined) race.title = dto.title;
     if (dto.description !== undefined) race.description = dto.description ?? null;
@@ -483,6 +593,21 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     }
     if (dto.raceState !== undefined) {
       race.raceState = this.mergeRaceState(race.raceState, dto.raceState);
+    }
+
+    const nextScheduledStartAt =
+      typeof race.raceState?.scheduledStartAt === 'string'
+        ? race.raceState.scheduledStartAt
+        : null;
+    if (nextScheduledStartAt && nextScheduledStartAt !== previousScheduledStartAt) {
+      race.raceState = this.activatePreStartTracking(
+        { ...(race.raceState || {}) },
+        nextScheduledStartAt,
+      );
+      countdownStarted = true;
+      countdownScheduledAt = nextScheduledStartAt;
+    } else if (!nextScheduledStartAt && previousScheduledStartAt) {
+      race.raceState = this.clearPreStartTracking({ ...(race.raceState || {}) });
     }
 
     let courseSnapshotChanged = false;
@@ -535,12 +660,14 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       dto.status === RaceStatusEnum.IN_PROGRESS &&
       previousStatus !== RaceStatusEnum.IN_PROGRESS
     ) {
-      const state = { ...(race.raceState || {}) };
+      let state = { ...(race.raceState || {}) };
       delete state.scheduledStartAt;
       if (!state.startedAt) {
         state.startedAt = new Date().toISOString();
       }
+      state = this.clearPreStartTracking(state);
       race.raceState = state;
+      countdownStarted = false;
     }
 
     const saved = await this.racesRepo.save(race);
@@ -577,6 +704,14 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       this.eventEmitter.emit('course.updated', {
         raceId: saved.id,
         courseSnapshot: saved.courseSnapshot,
+      });
+    }
+
+    if (countdownStarted && countdownScheduledAt) {
+      this.eventEmitter.emit('race.countdown.started', {
+        raceId: saved.id,
+        scheduledStartAt: countdownScheduledAt,
+        userId: user?.sub,
       });
     }
 

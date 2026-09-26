@@ -262,6 +262,15 @@ export class RaceEngineService {
             applicationId: app.id,
             finishTime: recordedAt,
           });
+          // Only the last unfinished boat completing the course closes the race.
+          // First-boat finish must leave race IN_PROGRESS for the rest of the fleet.
+          try {
+            await this.racesService.tryAutoFinishWhenFleetComplete(raceId);
+          } catch (err: any) {
+            this.logger.error(
+              `Auto-finish check failed for race ${raceId}: ${err?.message || err}`,
+            );
+          }
         }
 
         break;

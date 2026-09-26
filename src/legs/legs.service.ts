@@ -176,8 +176,13 @@ export class LegsService {
     raceOrder: number,
   ) {
     const courseIds = Array.isArray(dto.courseIds) ? dto.courseIds.filter(Boolean) : [];
+    const trimmedTitle = dto.title?.trim();
+    const title =
+      trimmedTitle
+      || (leg.kind === LegKindEnum.SINGLE ? leg.title?.trim() : '')
+      || this.defaultRaceTitle(raceOrder);
     const race = this.racesRepo.create({
-      title: dto.title?.trim() || this.defaultRaceTitle(raceOrder),
+      title,
       description: dto.description ?? null,
       startDate: dto.startDate ? new Date(dto.startDate) : leg.startDate,
       endDate: dto.endDate ? new Date(dto.endDate) : leg.endDate,
@@ -204,7 +209,7 @@ export class LegsService {
     const assignedCommitteeId = await this.resolveCommitteeId(dto.assignedCommitteeId);
     const raceDrafts = dto.races?.length
       ? dto.races
-      : [{ title: this.defaultRaceTitle(1) }];
+      : [{ title: kind === LegKindEnum.SINGLE ? dto.title : this.defaultRaceTitle(1) }];
 
     if (kind === LegKindEnum.SINGLE && raceDrafts.length > 1) {
       throw new BadRequestException('Tek yarış en fazla 1 yarış içerebilir.');
