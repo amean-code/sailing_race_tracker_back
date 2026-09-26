@@ -15,6 +15,7 @@ import { Race } from './race.entity';
 
 @Entity('track_points')
 @Index(['boatId', 'recordedAt'])
+@Index('track_points_race_id_boat_id_recorded_at_idx', ['raceId', 'boatId', 'recordedAt'])
 export class TrackPoint {
   @PrimaryColumn('text')
   id!: string;

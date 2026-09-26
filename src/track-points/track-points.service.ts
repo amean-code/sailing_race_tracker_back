@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { TrackPoint } from '../entities/track-point.entity';
 import { TrackPointInputDto } from './dto/track-point.dto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { buildLatestByBoatMap } from './find-latest-by-race';
 
 const INVALID_BOAT_IDS = new Set(['boat-1', '']);
 
@@ -140,13 +141,20 @@ export class TrackPointsService {
     return points.map((p) => this.serialize(p));
   }
 
-  async findLatestByRace(raceId: string, limit = 500) {
-    const points = await this.findAll({ raceId, limit });
-    const map = new Map<string, ReturnType<typeof this.serialize>>();
-    for (const pt of points) {
-      if (!pt.boatId || map.has(pt.boatId)) continue;
-      map.set(pt.boatId, pt);
-    }
-    return map;
+  /**
+   * Latest GPS point per boat in a race (independent of other boats' GPS frequency).
+   * Uses PostgreSQL DISTINCT ON — not a global LIMIT window.
+   */
+  async findLatestByRace(raceId: string) {
+    const points = await this.trackPointsRepo
+      .createQueryBuilder('tp')
+      .distinctOn(['tp.boat_id'])
+      .where('tp.race_id = :raceId', { raceId })
+      .orderBy('tp.boat_id')
+      .addOrderBy('tp.recorded_at', 'DESC')
+      .addOrderBy('tp.id', 'DESC')
+      .getMany();
+
+    return buildLatestByBoatMap(points.map((tp) => this.serialize(tp)));
   }
 }
