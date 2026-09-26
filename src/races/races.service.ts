@@ -55,6 +55,7 @@ import {
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import ExcelJS from 'exceljs';
+import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
 
 export type RaceResultsExportFormat = 'csv' | 'xlsx';
 
@@ -1020,10 +1021,11 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         committeeAccepted: Boolean(raceResult?.committeeAccepted),
       });
 
+      const identity = resolveApplicationBoatIdentity(app);
       return {
         applicationId: app.id,
-        sailNumber: app.sailNumber,
-        boatName: app.boatName,
+        sailNumber: identity.sailNumber,
+        boatName: identity.boatName,
         competitorName: app.name,
         displayColor: app.boat?.displayColor ?? null,
         checkpointIndex: maxCpIndex,
@@ -1285,7 +1287,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
                 
                 return `
                 <tr style="background-color: ${bg}; border-bottom: 1px solid #e2e8f0;">
-                  <td style="padding: 14px 16px; color: #475569;">${item.app.boatName || '—'}</td>
+                  <td style="padding: 14px 16px; color: #475569;">${resolveApplicationBoatIdentity(item.app).boatName || '—'}</td>
                   <td style="padding: 14px 16px; color: #475569;">${item.app.name || '—'}</td>
                   <td style="padding: 14px 16px; text-align: right;">${timeOrStatus}</td>
                 </tr>
@@ -1460,10 +1462,11 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         );
       });
 
+      const identity = resolveApplicationBoatIdentity(app);
       return [
         raceResult?.finishPosition != null ? String(raceResult.finishPosition) : '-',
-        app.boatName || '',
-        app.sailNumber || '',
+        identity.boatName,
+        identity.sailNumber,
         app.boat?.boatClass || '',
         app.name || '',
         statusLabel,
@@ -1609,8 +1612,9 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         appByBoatId.set(boat.id, applications[applications.length - 1]);
       } else {
         const app = appByBoatId.get(boat.id)!;
-        if (!app.boatName && boat.name) app.boatName = boat.name;
-        if (!app.sailNumber && boat.sailNumber) app.sailNumber = boat.sailNumber;
+        // Always prefer live boat identity so TUR / name renames stay consistent in playback.
+        if (boat.name) app.boatName = boat.name;
+        if (boat.sailNumber) app.sailNumber = boat.sailNumber;
       }
     }
 

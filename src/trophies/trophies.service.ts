@@ -24,8 +24,14 @@ import { serializeLeg, LegLike } from '../common/utils/serialize-leg';
 import { CreateTrophyDto, CreateTrophyLegDto, CreateTrophyGroupDto, UpdateTrophyDto, UpdateTrophyGroupDto } from './dto/trophy.dto';
 import { LegsService } from '../legs/legs.service';
 import { TrophyGroup } from '../entities/trophy-group.entity';
+import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
 
-function normalizeKey(sailNumber: string | null | undefined, email: string): string {
+function normalizeKey(
+  sailNumber: string | null | undefined,
+  email: string,
+  boatId?: string | null,
+): string {
+  if (boatId) return `boat:${boatId}`;
   const sail = (sailNumber || '').trim().toUpperCase();
   if (sail) return `sail:${sail}`;
   return `email:${email.trim().toLowerCase()}`;
@@ -592,6 +598,7 @@ export class TrophiesService {
 
     const applications = await this.applicationsRepo.find({
       where: { legId: In(legIds) },
+      relations: ['boat'],
     });
 
     const raceIds = races.map((r) => r.id);
@@ -632,13 +639,14 @@ export class TrophiesService {
     const competitors = new Map<string, Competitor>();
 
     const ensureCompetitor = (app: RaceApplication): Competitor => {
-      const key = normalizeKey(app.sailNumber, app.email);
+      const identity = resolveApplicationBoatIdentity(app);
+      const key = normalizeKey(identity.sailNumber, app.email, app.boatId);
       let c = competitors.get(key);
       if (!c) {
         c = {
           key,
-          sailNumber: app.sailNumber,
-          boatName: app.boatName,
+          sailNumber: identity.sailNumber,
+          boatName: identity.boatName,
           name: app.name,
           email: app.email,
           club: app.club,
@@ -649,8 +657,8 @@ export class TrophiesService {
         };
         competitors.set(key, c);
       } else {
-        if (!c.sailNumber && app.sailNumber) c.sailNumber = app.sailNumber;
-        if (app.boatName) c.boatName = app.boatName;
+        if (identity.sailNumber) c.sailNumber = identity.sailNumber;
+        if (identity.boatName) c.boatName = identity.boatName;
         if (app.name) c.name = app.name;
         if (app.club) c.club = app.club;
       }

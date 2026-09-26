@@ -115,6 +115,10 @@ export class BoatsService {
       relations: ['certificates'],
     });
     if (!boat) throw new NotFoundException('Tekne bulunamadı');
+
+    const prevName = boat.name;
+    const prevSailNumber = boat.sailNumber;
+
     if (dto.name !== undefined) boat.name = dto.name;
     if (dto.status !== undefined) boat.status = dto.status;
     if (dto.courseId !== undefined) boat.courseId = dto.courseId;
@@ -133,6 +137,18 @@ export class BoatsService {
       boat.certificates = await this.resolveCertificates(ownerId, dto.certificateIds);
     }
     await this.boatsRepo.save(boat);
+
+    // Keep race_applications snapshots in sync so rename never orphans race data / displays.
+    const nameChanged = dto.name !== undefined && boat.name !== prevName;
+    const sailChanged =
+      dto.sailNumber !== undefined && (boat.sailNumber ?? null) !== (prevSailNumber ?? null);
+    if (nameChanged || sailChanged) {
+      const patch: { boatName?: string; sailNumber?: string } = {};
+      if (nameChanged) patch.boatName = boat.name;
+      if (sailChanged) patch.sailNumber = boat.sailNumber ?? '';
+      await this.applicationsRepo.update({ boatId: id }, patch);
+    }
+
     return this.findOne(id);
   }
 

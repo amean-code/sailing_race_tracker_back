@@ -21,6 +21,7 @@ import {
   passedIndexSet,
 } from '../common/checkpoint-progress';
 import { Boat } from '../entities/boat.entity';
+import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
 
 type RaceWithApplication = {
   application: {
@@ -76,10 +77,11 @@ export class SailorService {
     app: RaceApplication,
     result?: Pick<RaceResult, 'finishPosition' | 'fleetSize' | 'status'> | null,
   ) {
+    const identity = resolveApplicationBoatIdentity(app);
     return {
       id: app.id,
-      boatName: app.boatName,
-      sailNumber: app.sailNumber,
+      boatName: identity.boatName,
+      sailNumber: identity.sailNumber,
       club: app.club,
       status: result?.status ?? app.status,
       createdAt: app.createdAt.toISOString(),
@@ -123,7 +125,7 @@ export class SailorService {
         { email, status: ApplicationStatusEnum.APPROVED },
         { email, status: ApplicationStatusEnum.CHECKED_IN },
       ],
-      relations: ['leg'],
+      relations: ['leg', 'boat'],
       order: { createdAt: 'DESC' },
     });
 
@@ -281,6 +283,8 @@ export class SailorService {
             ? resultStatus
             : app.status;
 
+      const identity = resolveApplicationBoatIdentity(app);
+
       return {
         raceId: race.id,
         legId: app.legId,
@@ -289,8 +293,8 @@ export class SailorService {
         courseSnapshot,
         applicationId: app.id,
         applicationStatus,
-        sailNumber: app.sailNumber,
-        boatName: app.boatName,
+        sailNumber: identity.sailNumber,
+        boatName: identity.boatName,
         raceTitle: race.title || app.leg?.title || '',
         raceStatus: race.status ?? null,
         raceStartedAt: startedAt,
@@ -331,7 +335,7 @@ export class SailorService {
 
     const applications = await this.applicationsRepo.find({
       where: { email },
-      relations: ['leg'],
+      relations: ['leg', 'boat'],
       order: { createdAt: 'DESC' },
     });
 
@@ -513,6 +517,7 @@ export class SailorService {
 
     const app = await this.applicationsRepo.findOne({
       where: { legId: race.legId, email },
+      relations: ['boat'],
     });
 
     if (!app) {
@@ -586,13 +591,14 @@ export class SailorService {
         ? (raceResult?.dnfReason || formatMissedCheckpointReason(missedCheckpoints.map((item) => item.label)))
         : null;
 
+    const identity = resolveApplicationBoatIdentity(app);
     return {
       results: {
         raceId,
         legId: race.legId,
         raceTitle: race.title,
-        sailNumber: app.sailNumber,
-        boatName: app.boatName,
+        sailNumber: identity.sailNumber,
+        boatName: identity.boatName,
         finishPosition: raceResult?.finishPosition ?? null,
         fleetSize,
         raceStartedAt: raceStartedAt ?? null,
@@ -610,11 +616,13 @@ export class SailorService {
     const email = user.email.toLowerCase();
     const applications = await this.applicationsRepo.find({
       where: { email },
-      relations: ['leg'],
+      relations: ['leg', 'boat'],
       order: { createdAt: 'DESC' },
     });
 
-    return applications.map((app) => ({
+    return applications.map((app) => {
+      const identity = resolveApplicationBoatIdentity(app);
+      return {
       id: app.id,
       legId: app.legId,
       raceTitle: app.leg?.title,
@@ -622,8 +630,8 @@ export class SailorService {
       raceStatus: app.leg?.status,
       refereeName: app.leg?.organizer ?? 'Sistem',
       boatId: app.boatId,
-      boatName: app.boatName,
-      sailNumber: app.sailNumber,
+      boatName: identity.boatName,
+      sailNumber: identity.sailNumber,
       crewMembers: app.crewMembers,
       status: app.status,
       paymentStatus: app.paymentStatus ?? 'NONE',
@@ -635,7 +643,8 @@ export class SailorService {
       paymentReviewedAt: app.paymentReviewedAt ? app.paymentReviewedAt.toISOString() : null,
       createdAt: app.createdAt.toISOString(),
       checkedInAt: app.checkedInAt ? app.checkedInAt.toISOString() : null,
-    }));
+    };
+    });
   }
 
   async getRaceLeaderboard(raceId: string, user: SessionUser) {
@@ -659,6 +668,7 @@ export class SailorService {
 
     const applications = await this.applicationsRepo.find({
       where: { legId: race.legId },
+      relations: ['boat'],
       order: { createdAt: 'ASC' },
     });
 
@@ -730,14 +740,15 @@ export class SailorService {
 
       const displayPosition = finishPosition ?? (index + 1);
       const segments = this.buildAlignedSegments(targets, appPasses);
+      const identity = resolveApplicationBoatIdentity(app);
 
       return {
         rank: displayPosition,
         applicationId: app.id,
         name: app.name,
         competitorName: app.name,
-        boatName: app.boatName,
-        sailNumber: app.sailNumber,
+        boatName: identity.boatName,
+        sailNumber: identity.sailNumber,
         club: app.club,
         finishPosition,
         fleetSize,

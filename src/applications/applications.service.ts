@@ -17,6 +17,7 @@ import {
 } from '../common/upload';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
 
 const APP_STATUSES = new Set<string>([
   ApplicationStatusEnum.PENDING,
@@ -45,6 +46,7 @@ export class ApplicationsService {
   ) {}
 
   serialize(app: RaceApplication) {
+    const identity = resolveApplicationBoatIdentity(app);
     return {
       id: app.id,
       legId: app.legId,
@@ -53,8 +55,8 @@ export class ApplicationsService {
       name: app.name,
       email: app.email,
       phone: app.phone,
-      boatName: app.boatName,
-      sailNumber: app.sailNumber,
+      boatName: identity.boatName,
+      sailNumber: identity.sailNumber,
       club: app.club,
       notes: app.notes,
       status: app.status,
@@ -259,7 +261,7 @@ export class ApplicationsService {
   async update(id: string, dto: UpdateApplicationDto, user?: SessionUser) {
     const app = await this.applicationsRepo.findOne({
       where: { id },
-      relations: ['leg', 'group'],
+      relations: ['leg', 'group', 'boat'],
     });
     if (!app) throw new NotFoundException('Başvuru bulunamadı');
 
@@ -315,7 +317,7 @@ export class ApplicationsService {
 
     const apps = await this.applicationsRepo.find({
       where: { id: In(dto.ids) },
-      relations: ['leg', 'group'],
+      relations: ['leg', 'group', 'boat'],
     });
 
     if (apps.length === 0) throw new NotFoundException('Başvurular bulunamadı');
@@ -360,7 +362,7 @@ export class ApplicationsService {
   private async getAppWithLeg(id: string) {
     const app = await this.applicationsRepo.findOne({
       where: { id },
-      relations: ['leg', 'group'],
+      relations: ['leg', 'group', 'boat'],
     });
     if (!app) throw new NotFoundException('Başvuru bulunamadı');
     return app;

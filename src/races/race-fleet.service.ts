@@ -12,6 +12,7 @@ import { Boat } from '../entities/boat.entity';
 import { ApplicationStatusEnum, UserRoleEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
 import { TrackPointsService } from '../track-points/track-points.service';
+import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
 
 const FLEET_COLORS = [
   '#0ea5e9',
@@ -37,14 +38,15 @@ export class RaceFleetService {
   ) {}
 
   private serializeApplication(app: RaceApplication) {
+    const identity = resolveApplicationBoatIdentity(app);
     return {
       id: app.id,
       legId: app.legId,
       name: app.name,
       email: app.email,
       phone: app.phone,
-      boatName: app.boatName,
-      sailNumber: app.sailNumber,
+      boatName: identity.boatName,
+      sailNumber: identity.sailNumber,
       club: app.club,
       notes: app.notes,
       status: app.status,
@@ -172,6 +174,8 @@ export class RaceFleetService {
     await this.boatsRepo.save(boat);
 
     app.boatId = boat.id;
+    app.boatName = boat.name;
+    app.sailNumber = boat.sailNumber ?? '';
     app.checkedInAt = new Date();
     await this.applicationsRepo.save(app);
 
