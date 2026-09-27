@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Logger, Post, Query } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { TrackPointsService } from './track-points.service';
 import { SyncTrackPointsDto } from './dto/track-point.dto';
@@ -9,20 +9,46 @@ import { AUTH_COOKIE } from '../common/constants';
 @ApiCookieAuth(AUTH_COOKIE)
 @Controller('track-points')
 export class TrackPointsController {
+  private readonly logger = new Logger(TrackPointsController.name);
+
   constructor(private readonly trackPointsService: TrackPointsService) {}
 
   @Post('sync')
   @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
   @ApiOperation({ summary: 'Offline GPS buffer batch sync (idempotent)' })
   async sync(@Body() dto: SyncTrackPointsDto) {
-    return this.trackPointsService.syncBatch(dto.points);
+    try {
+      return await this.trackPointsService.syncBatch(dto.points);
+    } catch (err: any) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'GPS_SYNC_ERROR',
+          route: 'POST /track-points/sync',
+          batchSize: dto?.points?.length ?? 0,
+          error: err?.message || String(err),
+        }),
+      );
+      throw err;
+    }
   }
 
   @Post()
   @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
   @ApiOperation({ summary: 'GPS noktaları batch kaydet (legacy)' })
   async create(@Body() dto: SyncTrackPointsDto) {
-    return this.trackPointsService.createBatch(dto.points);
+    try {
+      return await this.trackPointsService.createBatch(dto.points);
+    } catch (err: any) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'GPS_SYNC_ERROR',
+          route: 'POST /track-points',
+          batchSize: dto?.points?.length ?? 0,
+          error: err?.message || String(err),
+        }),
+      );
+      throw err;
+    }
   }
 
   @Get('live')

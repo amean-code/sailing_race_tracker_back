@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TrackPoint } from '../entities/track-point.entity';
@@ -7,9 +7,12 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { buildLatestByBoatMap } from './find-latest-by-race';
 
 const INVALID_BOAT_IDS = new Set(['boat-1', '']);
+const DETAIL_CAP = 20;
 
 @Injectable()
 export class TrackPointsService {
+  private readonly logger = new Logger(TrackPointsService.name);
+
   constructor(
     @InjectRepository(TrackPoint)
     private readonly trackPointsRepo: Repository<TrackPoint>,
@@ -25,6 +28,37 @@ export class TrackPointsService {
   private clientKey(point: TrackPointInputDto): string {
     const ts = point.timestamp ?? new Date(point.recordedAt ?? Date.now()).getTime();
     return `${point.boatId}:${ts}`;
+  }
+
+  private pointTimestampMs(point: TrackPointInputDto): number {
+    if (point.timestamp != null) return Number(point.timestamp);
+    if (point.recordedAt) return new Date(point.recordedAt).getTime();
+    return Date.now();
+  }
+
+  private summarizeBatch(points: TrackPointInputDto[]) {
+    const boatIds = [...new Set(points.map((p) => p.boatId).filter(Boolean))];
+    const raceIds = [...new Set(points.map((p) => p.raceId).filter(Boolean))];
+    let oldestTs: number | null = null;
+    let newestTs: number | null = null;
+    for (const p of points) {
+      const ts = this.pointTimestampMs(p);
+      if (oldestTs == null || ts < oldestTs) oldestTs = ts;
+      if (newestTs == null || ts > newestTs) newestTs = ts;
+    }
+    return {
+      batchSize: points.length,
+      boatIds,
+      raceIds,
+      oldestTs,
+      newestTs,
+      ckFirst: points.length ? this.clientKey(points[0]) : null,
+      ckLast: points.length ? this.clientKey(points[points.length - 1]) : null,
+    };
+  }
+
+  private capDetails<T>(items: T[]): T[] {
+    return items.slice(0, DETAIL_CAP);
   }
 
   serialize(tp: TrackPoint) {
@@ -52,21 +86,59 @@ export class TrackPointsService {
     let inserted = 0;
     let skipped = 0;
     let failed = 0;
+    const skippedDetails: Array<{ ck: string; reason: string; ts: number }> = [];
+    const failedDetails: Array<{ ck: string; reason: string; ts: number }> = [];
 
-    for (const point of points) {
+    const summary = this.summarizeBatch(points || []);
+    this.logger.log(JSON.stringify({ event: 'GPS_SYNC_RECEIVED', ...summary }));
+
+    for (const point of points || []) {
+      const ts = this.pointTimestampMs(point);
+      let key: string;
       try {
-        this.assertValidBoatId(point.boatId);
-      } catch {
+        key = this.clientKey(point);
+      } catch (err: any) {
         failed += 1;
+        failedDetails.push({
+          ck: `${point?.boatId ?? 'unknown'}:${ts}`,
+          reason: `client_key_error:${err?.message || err}`,
+          ts,
+        });
         continue;
       }
+
       try {
-        const key = this.clientKey(point);
+        this.assertValidBoatId(point.boatId);
+      } catch (err: any) {
+        failed += 1;
+        failedDetails.push({
+          ck: key,
+          reason: 'invalid_boat_id',
+          ts,
+        });
+        this.logger.warn(
+          JSON.stringify({
+            event: 'GPS_SYNC_POINT_FAILED',
+            ck: key,
+            ts,
+            boatId: point.boatId,
+            raceId: point.raceId ?? null,
+            reason: 'invalid_boat_id',
+            error: err?.message || String(err),
+          }),
+        );
+        continue;
+      }
+
+      try {
         const existing = await this.trackPointsRepo.findOne({
           where: { clientKey: key },
         });
         if (existing) {
           skipped += 1;
+          if (skippedDetails.length < DETAIL_CAP) {
+            skippedDetails.push({ ck: key, reason: 'duplicate_client_key', ts });
+          }
           continue;
         }
 
@@ -84,7 +156,7 @@ export class TrackPointsService {
         });
         const saved = await this.trackPointsRepo.save(entity);
         inserted += 1;
-        
+
         if (point.raceId) {
           this.eventEmitter.emit('gps.received', {
             raceId: point.raceId,
@@ -95,9 +167,55 @@ export class TrackPointsService {
             recordedAt: saved.recordedAt.toISOString(),
           });
         }
-      } catch {
+      } catch (err: any) {
         failed += 1;
+        const reason = `db_error:${err?.message || err}`;
+        if (failedDetails.length < DETAIL_CAP) {
+          failedDetails.push({ ck: key, reason, ts });
+        }
+        this.logger.error(
+          JSON.stringify({
+            event: 'GPS_SYNC_POINT_FAILED',
+            ck: key,
+            ts,
+            boatId: point.boatId,
+            raceId: point.raceId ?? null,
+            reason,
+          }),
+        );
       }
+    }
+
+    const partial = failed > 0 && (inserted > 0 || skipped > 0);
+    this.logger.log(
+      JSON.stringify({
+        event: 'GPS_SYNC_RESULT',
+        ...summary,
+        inserted,
+        skipped,
+        failed,
+        partial,
+        skippedSample: this.capDetails(skippedDetails),
+        failedSample: this.capDetails(failedDetails),
+      }),
+    );
+
+    if (partial) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'GPS_SYNC_PARTIAL',
+          batchSize: summary.batchSize,
+          inserted,
+          skipped,
+          failed,
+          boatIds: summary.boatIds,
+          raceIds: summary.raceIds,
+          oldestTs: summary.oldestTs,
+          newestTs: summary.newestTs,
+          failedSample: this.capDetails(failedDetails),
+          skippedSample: this.capDetails(skippedDetails),
+        }),
+      );
     }
 
     return { inserted, skipped, failed, success: inserted + skipped > 0 };
