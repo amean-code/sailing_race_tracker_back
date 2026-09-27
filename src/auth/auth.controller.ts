@@ -6,12 +6,14 @@ import {
   Param,
   Patch,
   Post,
+  Req,
   Res,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
-import type { Response } from 'express';
+import { JwtService } from '@nestjs/jwt';
+import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import {
   LoginDto,
@@ -32,6 +34,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly config: ConfigService,
+    private readonly jwtService: JwtService,
   ) {}
 
   private setCookie(res: Response, token: string) {
@@ -67,11 +70,21 @@ export class AuthController {
     return { user };
   }
 
+  @Public()
   @Post('logout')
-  @ApiOperation({ summary: 'Oturumu kapat' })
-  async logout(@CurrentUser() session: SessionUser | undefined, @Res({ passthrough: true }) res: Response) {
-    if (session?.sub) {
-      await this.authService.logout(session.sub);
+  @ApiOperation({ summary: 'Oturumu kapat (geçersiz/eski oturumda da cookie temizlenir)' })
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const token = req.cookies?.[AUTH_COOKIE] as string | undefined;
+    if (token) {
+      try {
+        const payload = this.jwtService.verify<{ sub?: string; sessionId?: string }>(token);
+        if (payload?.sub) {
+          // Only clear DB session if this JWT still owns the active session.
+          await this.authService.logout(payload.sub, payload.sessionId);
+        }
+      } catch {
+        // Expired/invalid token: still clear the cookie below.
+      }
     }
     this.clearCookie(res);
     return { ok: true };

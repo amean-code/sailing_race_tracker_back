@@ -1345,10 +1345,20 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     return id;
   }
 
+  private padExportMetaRow(label: string, timeLabel: string, columnCount: number): string[] {
+    const row = [label, timeLabel];
+    while (row.length < columnCount) {
+      row.push('');
+    }
+    return row;
+  }
+
   private async buildRaceResultsTable(id: string): Promise<{
     raceTitle: string;
     headers: string[];
     rows: string[][];
+    metaFirstRow: string[];
+    metaLastRow: string[];
   }> {
     const race = await this.loadRace(id);
     if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
@@ -1382,6 +1392,19 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       'Durum',
       ...checkpointHeaders,
     ];
+
+    const startedAtRaw = race.raceState?.startedAt;
+    const finishedAtRaw = race.raceState?.finishedAt;
+    const metaFirstRow = this.padExportMetaRow(
+      'Hakem Start',
+      this.formatPassTime(startedAtRaw ? new Date(String(startedAtRaw)) : null),
+      headers.length,
+    );
+    const metaLastRow = this.padExportMetaRow(
+      'Hakem Finish',
+      this.formatPassTime(finishedAtRaw ? new Date(String(finishedAtRaw)) : null),
+      headers.length,
+    );
 
     const passesByApp = new Map<string, CheckpointPass[]>();
     for (const pass of allPasses) {
@@ -1478,6 +1501,8 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       raceTitle: race.title || 'race',
       headers,
       rows,
+      metaFirstRow,
+      metaLastRow,
     };
   }
 
@@ -1495,19 +1520,24 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     id: string,
     format: RaceResultsExportFormat = 'csv',
   ): Promise<RaceResultsExportFile> {
-    const { raceTitle, headers, rows } = await this.buildRaceResultsTable(id);
+    const { raceTitle, headers, rows, metaFirstRow, metaLastRow } =
+      await this.buildRaceResultsTable(id);
     const baseName = this.sanitizeExportFilename(raceTitle);
+    const headerRowIndex = 2;
+    const dataEndRowIndex = headerRowIndex + rows.length;
 
     if (format === 'xlsx') {
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'Sailing Race Tracker';
       workbook.created = new Date();
       const sheet = workbook.addWorksheet('Sonuçlar');
+      sheet.addRow(metaFirstRow);
       sheet.addRow(headers);
       for (const row of rows) {
         sheet.addRow(row);
       }
-      const headerRow = sheet.getRow(1);
+      sheet.addRow(metaLastRow);
+      const headerRow = sheet.getRow(headerRowIndex);
       headerRow.font = { bold: true };
       headerRow.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
       headerRow.height = 45;
@@ -1516,14 +1546,16 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
         pattern: 'solid',
         fgColor: { argb: 'FFE2E8F0' },
       };
-      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      sheet.views = [{ state: 'frozen', ySplit: headerRowIndex }];
       sheet.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(rows.length + 1, 1), column: headers.length },
+        from: { row: headerRowIndex, column: 1 },
+        to: { row: Math.max(dataEndRowIndex, headerRowIndex), column: headers.length },
       };
       headers.forEach((_, colIndex) => {
         const column = sheet.getColumn(colIndex + 1);
         let max = String(headers[colIndex] || '').length;
+        max = Math.max(max, String(metaFirstRow[colIndex] ?? '').length);
+        max = Math.max(max, String(metaLastRow[colIndex] ?? '').length);
         for (const row of rows) {
           max = Math.max(max, String(row[colIndex] ?? '').length);
         }
@@ -1540,8 +1572,10 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     const escapeCsv = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
     const csvLines = [
+      metaFirstRow.map(escapeCsv).join(';'),
       headers.map(escapeCsv).join(';'),
       ...rows.map((row) => row.map(escapeCsv).join(';')),
+      metaLastRow.map(escapeCsv).join(';'),
     ];
     const csv = '\uFEFF' + csvLines.join('\n');
     return {

@@ -27,6 +27,7 @@ import {
 } from './dto/auth.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SessionUser } from '../common/decorators/current-user.decorator';
+import { invalidateUserSessionCache } from './jwt.strategy';
 
 const SALT_ROUNDS = 12;
 
@@ -155,21 +156,16 @@ export class AuthService {
     }
 
     this.assertUserCanAccess(user);
-    
-    // Single active session check for SAILOR
+
+    // SAILOR: yeni giriş her zaman eski oturumu düşürür (tek aktif oturum)
     let newSessionId: string | undefined = undefined;
     if (user.role === UserRoleEnum.SAILOR) {
-      if (user.sessionLastActiveAt) {
-        const diffSeconds = (new Date().getTime() - user.sessionLastActiveAt.getTime()) / 1000;
-        if (diffSeconds < 30) {
-          throw new ForbiddenException('Hesap şu an başka bir cihazda aktif. (Çıkış yapılmadıysa 30 sn bekleyiniz)');
-        }
-      }
       newSessionId = uuidv4();
       user.currentSessionId = newSessionId;
       user.sessionLastActiveAt = new Date();
+      invalidateUserSessionCache(user.id);
     }
-    
+
     user.lastLoginAt = new Date();
     await this.usersRepo.save(user);
     return { user: this.toPublicUser(user), token: this.createToken(user, newSessionId) };
@@ -187,12 +183,21 @@ export class AuthService {
     return { ok: true };
   }
 
-  async logout(userId: string) {
+  /**
+   * Clears DB session only when this request still owns the active session.
+   * A kicked device (stale sessionId) must not wipe the newer device's session.
+   */
+  async logout(userId: string, sessionId?: string | null) {
     const user = await this.usersRepo.findOne({ where: { id: userId } });
     if (user && user.role === UserRoleEnum.SAILOR) {
-      user.currentSessionId = null;
-      user.sessionLastActiveAt = null;
-      await this.usersRepo.save(user);
+      const ownsActiveSession =
+        !sessionId || !user.currentSessionId || user.currentSessionId === sessionId;
+      if (ownsActiveSession) {
+        user.currentSessionId = null;
+        user.sessionLastActiveAt = null;
+        await this.usersRepo.save(user);
+        invalidateUserSessionCache(user.id);
+      }
     }
     return { ok: true };
   }

@@ -26,6 +26,19 @@ const USER_CACHE_TTL_MS = 10_000; // 10 seconds
 type CachedUser = { user: SessionUser; expiresAt: number };
 const userCache = new Map<string, CachedUser>();
 
+function cacheKey(userId: string, sessionId?: string): string {
+  return `${userId}:${sessionId || ''}`;
+}
+
+/** Drop cached session entries for a user (e.g. after login rotates sessionId). */
+export function invalidateUserSessionCache(userId: string): void {
+  for (const key of userCache.keys()) {
+    if (key === userId || key.startsWith(`${userId}:`)) {
+      userCache.delete(key);
+    }
+  }
+}
+
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
@@ -47,8 +60,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Yetkisiz erişim');
     }
 
-    // Return cached session user if still valid
-    const cached = userCache.get(payload.sub);
+    const key = cacheKey(payload.sub, payload.sessionId);
+    const cached = userCache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.user;
     }
@@ -58,11 +71,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       select: ['id', 'email', 'name', 'role', 'status', 'currentSessionId'],
     });
     if (!user) {
-      userCache.delete(payload.sub);
+      invalidateUserSessionCache(payload.sub);
       throw new UnauthorizedException('Yetkisiz erişim');
     }
     if (user.status === UserStatusEnum.REJECTED || user.status === UserStatusEnum.SUSPENDED) {
-      userCache.delete(payload.sub);
+      invalidateUserSessionCache(payload.sub);
       throw new UnauthorizedException(
         user.status === UserStatusEnum.REJECTED
           ? 'Hesabınız reddedildi. Lütfen yönetici ile iletişime geçin.'
@@ -81,14 +94,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     if (user.role === 'SAILOR') {
       if (user.currentSessionId && user.currentSessionId !== payload.sessionId) {
-        userCache.delete(payload.sub);
+        invalidateUserSessionCache(payload.sub);
         throw new UnauthorizedException('Oturumunuz başka bir cihazdan giriş yapıldığı için sonlandırıldı.');
       }
     }
 
     // Cache the resolved user for a short TTL to eliminate duplicate DB lookups
     // within the same page-load burst of parallel requests.
-    userCache.set(payload.sub, { user: sessionUser, expiresAt: Date.now() + USER_CACHE_TTL_MS });
+    userCache.set(key, { user: sessionUser, expiresAt: Date.now() + USER_CACHE_TTL_MS });
 
     return sessionUser;
   }
