@@ -3,6 +3,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 /**
  * Introduces legs + race_results, migrates existing races into leg containers,
  * and moves applications from race_id to leg_id.
+ *
+ * Idempotent for DBs already migrated via synchronize:true (no race_applications.race_id).
  */
 export class LegAndRaceHierarchy1785200000000 implements MigrationInterface {
   name = 'LegAndRaceHierarchy1785200000000';
@@ -72,79 +74,103 @@ export class LegAndRaceHierarchy1785200000000 implements MigrationInterface {
       )
     `);
 
-    // Migrate each existing race into a leg (if not already linked)
+    // Legacy data move: only when pre-hierarchy race columns still exist.
     await queryRunner.query(`
-      INSERT INTO "legs" (
-        "id", "title", "description", "location", "venue", "organizer", "boat_class",
-        "kind", "status", "start_date", "end_date", "registration_deadline", "capacity",
-        "assigned_committee_id", "trophy_id", "leg_order", "created_by_id", "created_at", "updated_at"
-      )
-      SELECT
-        r."id" || '-leg',
-        r."title",
-        r."description",
-        COALESCE(r."location", ''),
-        r."venue",
-        r."organizer",
-        r."boat_class",
-        CASE
-          WHEN r."type"::text = 'TROFE_LEG' THEN 'TROFE_LEG'::"LegKind"
-          ELSE 'REGATA'::"LegKind"
-        END,
-        r."status",
-        r."start_date",
-        r."end_date",
-        r."registration_deadline",
-        COALESCE(r."capacity", 30),
-        r."assigned_committee_id",
-        r."trophy_id",
-        r."leg_order",
-        r."created_by_id",
-        r."created_at",
-        r."updated_at"
-      FROM "races" r
-      WHERE r."leg_id" IS NULL
-        AND NOT EXISTS (SELECT 1 FROM "legs" l WHERE l."id" = r."id" || '-leg')
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'races' AND column_name = 'location'
+        ) AND EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'races' AND column_name = 'type'
+        ) THEN
+          INSERT INTO "legs" (
+            "id", "title", "description", "location", "venue", "organizer", "boat_class",
+            "kind", "status", "start_date", "end_date", "registration_deadline", "capacity",
+            "assigned_committee_id", "trophy_id", "leg_order", "created_by_id", "created_at", "updated_at"
+          )
+          SELECT
+            r."id" || '-leg',
+            r."title",
+            r."description",
+            COALESCE(r."location", ''),
+            r."venue",
+            r."organizer",
+            r."boat_class",
+            CASE
+              WHEN r."type"::text = 'TROFE_LEG' THEN 'TROFE_LEG'::"LegKind"
+              ELSE 'REGATA'::"LegKind"
+            END,
+            r."status",
+            r."start_date",
+            r."end_date",
+            r."registration_deadline",
+            COALESCE(r."capacity", 30),
+            r."assigned_committee_id",
+            r."trophy_id",
+            r."leg_order",
+            r."created_by_id",
+            r."created_at",
+            r."updated_at"
+          FROM "races" r
+          WHERE r."leg_id" IS NULL
+            AND NOT EXISTS (SELECT 1 FROM "legs" l WHERE l."id" = r."id" || '-leg');
+        END IF;
+      END $$;
     `);
 
     await queryRunner.query(`
       UPDATE "races" r
       SET "leg_id" = r."id" || '-leg', "race_order" = 1
       WHERE r."leg_id" IS NULL
+        AND EXISTS (SELECT 1 FROM "legs" l WHERE l."id" = r."id" || '-leg')
     `);
 
     await queryRunner.query(`
       ALTER TABLE "race_applications" ADD COLUMN IF NOT EXISTS "leg_id" text
     `);
 
+    // Only when legacy race_applications.race_id still exists (pre-hierarchy DBs).
     await queryRunner.query(`
-      UPDATE "race_applications" a
-      SET "leg_id" = r."leg_id"
-      FROM "races" r
-      WHERE a."race_id" = r."id" AND a."leg_id" IS NULL
-    `);
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'race_applications'
+            AND column_name = 'race_id'
+        ) THEN
+          UPDATE "race_applications" a
+          SET "leg_id" = r."leg_id"
+          FROM "races" r
+          WHERE a."race_id" = r."id" AND a."leg_id" IS NULL;
 
-    await queryRunner.query(`
-      INSERT INTO "race_results" ("id", "application_id", "race_id", "finish_position", "status", "fleet_size", "created_at", "updated_at")
-      SELECT
-        a."id" || '-result',
-        a."id",
-        a."race_id",
-        a."finish_position",
-        CASE
-          WHEN a."status" IN ('DNS', 'DNF', 'DSQ') THEN a."status"
-          WHEN a."finish_position" IS NOT NULL THEN 'FINISHED'
-          ELSE 'PENDING'
-        END,
-        a."fleet_size",
-        now(),
-        now()
-      FROM "race_applications" a
-      WHERE a."race_id" IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM "race_results" rr
-          WHERE rr."application_id" = a."id" AND rr."race_id" = a."race_id"
-        )
+          INSERT INTO "race_results" (
+            "id", "application_id", "race_id", "finish_position", "status", "fleet_size",
+            "created_at", "updated_at"
+          )
+          SELECT
+            a."id" || '-result',
+            a."id",
+            a."race_id",
+            a."finish_position",
+            CASE
+              WHEN a."status" IN ('DNS', 'DNF', 'DSQ') THEN a."status"
+              WHEN a."finish_position" IS NOT NULL THEN 'FINISHED'
+              ELSE 'PENDING'
+            END,
+            a."fleet_size",
+            now(),
+            now()
+          FROM "race_applications" a
+          WHERE a."race_id" IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM "race_results" rr
+              WHERE rr."application_id" = a."id" AND rr."race_id" = a."race_id"
+            );
+        END IF;
+      END $$;
     `);
 
     await queryRunner.query(`
@@ -206,7 +232,9 @@ export class LegAndRaceHierarchy1785200000000 implements MigrationInterface {
     await queryRunner.query(`
       ALTER TABLE "race_applications" DROP CONSTRAINT IF EXISTS "FK_race_applications_race"
     `);
-    // Drop unique on (race_id, email) if named differently
+
+    // Only drop unique constraints that still include race_id (legacy).
+    // Do NOT drop UQ_race_applications_leg_email on already-migrated DBs.
     await queryRunner.query(`
       DO $$ DECLARE r record;
       BEGIN
@@ -214,7 +242,11 @@ export class LegAndRaceHierarchy1785200000000 implements MigrationInterface {
           SELECT c.conname
           FROM pg_constraint c
           JOIN pg_class t ON c.conrelid = t.oid
-          WHERE t.relname = 'race_applications' AND c.contype = 'u'
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE n.nspname = 'public'
+            AND t.relname = 'race_applications'
+            AND c.contype = 'u'
+            AND pg_get_constraintdef(c.oid) ILIKE '%race_id%'
         LOOP
           EXECUTE 'ALTER TABLE race_applications DROP CONSTRAINT IF EXISTS ' || quote_ident(r.conname);
         END LOOP;
