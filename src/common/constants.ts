@@ -91,6 +91,11 @@ export enum CertificateTypeEnum {
   OTHER = 'OTHER',
 }
 
+export enum DeviceStatusEnum {
+  ACTIVE = 'ACTIVE',
+  DISABLED = 'DISABLED',
+}
+
 export enum PaymentStatusEnum {
   NONE = 'NONE',
   PENDING = 'PENDING',

@@ -24,6 +24,7 @@ import {
   TrophyGroup,
   Leg,
   RaceResult,
+  Device,
 } from './entities';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
@@ -48,6 +49,7 @@ import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { TelemetryModule } from './telemetry/telemetry.module';
 import { SettingsModule } from './settings/settings.module';
 import { CertificatesModule } from './certificates/certificates.module';
+import { DevicesModule } from './devices/devices.module';
 
 @Module({
   imports: [
@@ -79,6 +81,7 @@ import { CertificatesModule } from './certificates/certificates.module';
           TrophyGroup,
           Leg,
           RaceResult,
+          Device,
         ],
         synchronize: true,
         logging: process.env.NODE_ENV === 'production' ? false : ['query', 'error'],
@@ -106,6 +109,7 @@ import { CertificatesModule } from './certificates/certificates.module';
     TelemetryModule,
     SettingsModule,
     CertificatesModule,
+    DevicesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

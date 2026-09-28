@@ -19,6 +19,7 @@ import {
   TrophyGroup,
   Leg,
   RaceResult,
+  Device,
 } from '../entities';
 
 export const AppDataSource = new DataSource({
@@ -42,6 +43,7 @@ export const AppDataSource = new DataSource({
     TrophyGroup,
     Leg,
     RaceResult,
+    Device,
   ],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: true,

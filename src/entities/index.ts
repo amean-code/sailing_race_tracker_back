@@ -17,3 +17,4 @@ export { CheckpointPass } from './checkpoint-pass.entity';
 export { AuditLog } from './audit-log.entity';
 export { Setting } from './setting.entity';
 export { Certificate } from './certificate.entity';
+export { Device } from './device.entity';

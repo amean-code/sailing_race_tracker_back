@@ -32,10 +32,20 @@ async function bootstrap() {
     .setTitle(API_NAME)
     .setDescription(
       'BAYK Tracker REST API — yarış, parkur, tekne ve GPS senkronizasyonu. ' +
-        `Kimlik doğrulama: \`${AUTH_COOKIE}\` httpOnly cookie.`,
+        `Kimlik doğrulama: \`${AUTH_COOKIE}\` httpOnly cookie. ` +
+        'IoT cihazlar: `Authorization: Bearer <deviceApiKey>` (POST /api/devices/locations).',
     )
     .setVersion('0.2.0')
     .addCookieAuth(AUTH_COOKIE)
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'Device API Key',
+        description: 'IoT device API key (plaintext shown once at create/rotate)',
+      },
+      'device-api-key',
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
