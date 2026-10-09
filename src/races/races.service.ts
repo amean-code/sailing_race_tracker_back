@@ -612,18 +612,19 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     }
 
     let courseSnapshotChanged = false;
-    if (dto.courseId !== undefined) {
-      if (dto.courseId) {
-        const course = await this.coursesRepo.findOne({ where: { id: dto.courseId } });
+    const previousCourseId = race.courseId;
+    const applyActiveCourseChange = async (nextCourseId: string | null) => {
+      if (nextCourseId) {
+        const course = await this.coursesRepo.findOne({ where: { id: nextCourseId } });
         if (!course) throw new NotFoundException('Seçilen parkur bulunamadı.');
       }
-      const previousCourseId = race.courseId;
-      race.courseId = dto.courseId ?? null;
+      if (nextCourseId === race.courseId) return;
+      race.courseId = nextCourseId;
       // Clear the loaded relation so TypeORM save does not write the old FK back.
       (race as Race & { course?: Course | null }).course = null;
       // Changing the active course invalidates a stale snapshot (race control
       // would otherwise keep showing the old layout).
-      if (dto.courseSnapshot === undefined && race.courseId !== previousCourseId) {
+      if (dto.courseSnapshot === undefined) {
         if (race.status === RaceStatusEnum.IN_PROGRESS && race.courseId) {
           const courseForSnapshot = await this.coursesRepo.findOne({
             where: { id: race.courseId },
@@ -637,12 +638,22 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
           courseSnapshotChanged = true;
         }
       }
+    };
+
+    if (dto.courseId !== undefined) {
+      await applyActiveCourseChange(dto.courseId ?? null);
     }
     if (dto.courseIds !== undefined) {
       race.courseIds = (dto.courseIds ?? []).filter(Boolean);
-      // Admin pool assignment: if no active course yet and a single course was assigned, link it.
-      if (dto.courseId === undefined && !race.courseId && race.courseIds.length === 1) {
-        race.courseId = race.courseIds[0];
+      // Keep active course aligned with the admin/committee pool so sailor + referee views stay consistent.
+      if (dto.courseId === undefined) {
+        if (race.courseIds.length === 1) {
+          await applyActiveCourseChange(race.courseIds[0]);
+        } else if (race.courseIds.length === 0) {
+          await applyActiveCourseChange(null);
+        } else if (race.courseId && !race.courseIds.includes(race.courseId)) {
+          await applyActiveCourseChange(null);
+        }
       }
     }
     if (dto.courseSnapshot !== undefined) {
@@ -672,6 +683,15 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     }
 
     const saved = await this.racesRepo.save(race);
+
+    // Fleet boats inherit the race course for GPS / sailor tracking — keep them in sync.
+    if (saved.courseId !== previousCourseId) {
+      await this.boatsRepo.update(
+        { raceId: saved.id },
+        { courseId: saved.courseId },
+      );
+    }
+
     const result = await this.findOne(saved.id);
 
     const ctx = {
