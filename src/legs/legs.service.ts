@@ -15,6 +15,7 @@ import { Boat } from '../entities/boat.entity';
 import { Trophy } from '../entities/trophy.entity';
 import { User } from '../entities/user.entity';
 import {
+  ApplicationStatusEnum,
   LegKindEnum,
   NotificationEventEnum,
   RaceStatusEnum,
@@ -23,6 +24,11 @@ import {
 import { SessionUser } from '../common/decorators';
 import { serializeLeg, LegLike } from '../common/utils/serialize-leg';
 import { serializeRace } from '../common/utils/serialize-race';
+import {
+  countedApplicationWhere,
+  releaseBoatBoundToApplication,
+} from '../common/utils/active-applications';
+import { deleteUploadFile } from '../common/upload';
 import {
   CreateLegDto,
   CreateLegRaceDto,
@@ -101,7 +107,9 @@ export class LegsService {
       }),
     );
 
-    const applicationCount = await this.applicationsRepo.count({ where: { legId: leg.id } });
+    const applicationCount = await this.applicationsRepo.count({
+      where: countedApplicationWhere(leg.id),
+    });
     return serializeLeg({
       ...leg,
       applicationCount,
@@ -518,9 +526,15 @@ export class LegsService {
     const email = dto.email.toLowerCase();
     const existing = await this.applicationsRepo.findOne({
       where: { legId, email },
+      relations: ['boat'],
     });
-    if (existing) {
+    if (existing && existing.status !== ApplicationStatusEnum.WITHDRAWN) {
       throw new ConflictException('Bu e-posta ile zaten başvurdunuz');
+    }
+    if (existing) {
+      await releaseBoatBoundToApplication(this.boatsRepo, existing, existing.boat);
+      deleteUploadFile(existing.paymentReceiptPath);
+      await this.applicationsRepo.remove(existing);
     }
 
     const application = this.applicationsRepo.create({

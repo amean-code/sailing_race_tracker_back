@@ -8,7 +8,7 @@ import { Race } from '../entities/race.entity';
 import { TrophyGroup } from '../entities/trophy-group.entity';
 import { ApplicationStatusEnum, PaymentStatusEnum, UserRoleEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
-import { BulkUpdateApplicationDto, ReviewPaymentDto, UpdateApplicationDto } from './dto/application.dto';
+import { BulkDeleteApplicationDto, BulkUpdateApplicationDto, ReviewPaymentDto, UpdateApplicationDto } from './dto/application.dto';
 import {
   absoluteUploadPath,
   deleteUploadFile,
@@ -18,6 +18,7 @@ import {
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
+import { releaseBoatBoundToApplication } from '../common/utils/active-applications';
 
 const APP_STATUSES = new Set<string>([
   ApplicationStatusEnum.PENDING,
@@ -288,6 +289,8 @@ export class ApplicationsService {
           temporaryGroupAssignment: dto.temporaryGroupAssignment,
         });
         await this.ensureBoatForApproval(app, user);
+      } else if (nextStatus === ApplicationStatusEnum.WITHDRAWN) {
+        await this.markWithdrawn(app);
       }
     } else if (dto.groupId !== undefined) {
       // Reassign group without status change (approved apps)
@@ -348,6 +351,8 @@ export class ApplicationsService {
         });
         if (app.leg?.trophyId) pendingInGroup += 1;
         await this.ensureBoatForApproval(app, user);
+      } else if (nextStatus === ApplicationStatusEnum.WITHDRAWN) {
+        await this.markWithdrawn(app);
       }
 
       const saved = await this.applicationsRepo.save(app);
@@ -357,6 +362,55 @@ export class ApplicationsService {
     }
 
     return results;
+  }
+
+  private async markWithdrawn(app: RaceApplication) {
+    await releaseBoatBoundToApplication(this.boatsRepo, app, app.boat);
+    app.checkedInAt = null;
+    app.groupId = null;
+    app.group = null;
+    app.temporaryGroupAssignment = false;
+  }
+
+  private async deleteWithdrawn(app: RaceApplication) {
+    await releaseBoatBoundToApplication(this.boatsRepo, app, app.boat);
+    deleteUploadFile(app.paymentReceiptPath);
+    await this.applicationsRepo.remove(app);
+  }
+
+  async remove(id: string, user: SessionUser) {
+    const app = await this.getAppWithLeg(id);
+    this.assertCanManageApp(app, user);
+    if (app.status !== ApplicationStatusEnum.WITHDRAWN) {
+      throw new BadRequestException('Yalnızca çekilen başvurular silinebilir');
+    }
+    await this.deleteWithdrawn(app);
+    return { ok: true };
+  }
+
+  async bulkRemove(dto: BulkDeleteApplicationDto, user: SessionUser) {
+    if (!dto.ids || dto.ids.length === 0) {
+      throw new BadRequestException('En az bir başvuru seçilmelidir');
+    }
+
+    const apps = await this.applicationsRepo.find({
+      where: { id: In(dto.ids) },
+      relations: ['leg', 'group', 'boat'],
+    });
+    if (apps.length === 0) throw new NotFoundException('Başvurular bulunamadı');
+
+    for (const app of apps) {
+      this.assertCanManageApp(app, user);
+      if (app.status !== ApplicationStatusEnum.WITHDRAWN) {
+        throw new BadRequestException('Yalnızca çekilen başvurular silinebilir');
+      }
+    }
+
+    for (const app of apps) {
+      await this.deleteWithdrawn(app);
+    }
+
+    return { ok: true, deleted: apps.length };
   }
 
   private async getAppWithLeg(id: string) {

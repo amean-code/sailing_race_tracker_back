@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -15,7 +16,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiConsumes, ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { ApplicationsService } from './applications.service';
-import { BulkUpdateApplicationDto, ReviewPaymentDto, UpdateApplicationDto } from './dto/application.dto';
+import { BulkDeleteApplicationDto, BulkUpdateApplicationDto, ReviewPaymentDto, UpdateApplicationDto } from './dto/application.dto';
 import { CurrentUser, Roles, SessionUser } from '../common/decorators';
 import { AUTH_COOKIE } from '../common/constants';
 import {
@@ -66,6 +67,23 @@ export class ApplicationsController {
   ) {
     const applications = await this.applicationsService.bulkUpdate(dto, user);
     return { applications };
+  }
+
+  @Post('bulk-delete')
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Çekilen başvuruları toplu sil' })
+  async bulkRemove(
+    @Body() dto: BulkDeleteApplicationDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    return this.applicationsService.bulkRemove(dto, user);
+  }
+
+  @Delete(':id')
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Çekilen başvuruyu sil' })
+  async remove(@Param('id') id: string, @CurrentUser() user: SessionUser) {
+    return this.applicationsService.remove(id, user);
   }
 
   @Post(':id/payment-receipt')

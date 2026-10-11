@@ -53,6 +53,12 @@ export class BulkUpdateApplicationDto {
   temporaryGroupAssignment?: boolean;
 }
 
+export class BulkDeleteApplicationDto {
+  @ApiProperty({ type: [String], description: 'Silinecek çekilmiş başvuru ID listesi' })
+  @IsArray()
+  ids!: string[];
+}
+
 export class ReviewPaymentDto {
   @ApiProperty({ enum: PAYMENT_REVIEW })
   @IsIn(PAYMENT_REVIEW)

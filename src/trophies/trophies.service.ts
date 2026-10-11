@@ -21,6 +21,7 @@ import {
 } from '../common/constants';
 import { SessionUser } from '../common/decorators';
 import { serializeLeg, LegLike } from '../common/utils/serialize-leg';
+import { countedApplicationWhere } from '../common/utils/active-applications';
 import { CreateTrophyDto, CreateTrophyLegDto, CreateTrophyGroupDto, UpdateTrophyDto, UpdateTrophyGroupDto } from './dto/trophy.dto';
 import { LegsService } from '../legs/legs.service';
 import { TrophyGroup } from '../entities/trophy-group.entity';
@@ -205,7 +206,7 @@ export class TrophiesService {
           order: { raceOrder: 'ASC', startDate: 'ASC' },
         });
         const applicationCount = await this.applicationsRepo.count({
-          where: { legId: leg.id },
+          where: countedApplicationWhere(leg.id),
         });
         return serializeLeg({
           ...leg,

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Not } from 'typeorm';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Race } from '../entities/race.entity';
 import { RaceResult } from '../entities/race-result.entity';
@@ -11,6 +11,7 @@ import {
   RaceResultStatusEnum,
 } from '../common/constants';
 import { computeRegistrationState, serializeRace } from '../common/utils/serialize-race';
+import { countedApplicationWhere } from '../common/utils/active-applications';
 import { SessionUser } from '../common/decorators';
 import { resolveTrackingConfig } from '../common/tracking-config';
 import {
@@ -59,7 +60,7 @@ export class SailorService {
 
   private async raceWithCount(race: Race) {
     const applicationCount = race.legId
-      ? await this.applicationsRepo.count({ where: { legId: race.legId } })
+      ? await this.applicationsRepo.count({ where: countedApplicationWhere(race.legId) })
       : 0;
     const serialized = serializeRace(race);
     const reg = computeRegistrationState(
@@ -104,7 +105,10 @@ export class SailorService {
   async getAppliedRaceIds(user: SessionUser) {
     const email = user.email.toLowerCase();
     const applications = await this.applicationsRepo.find({
-      where: { email },
+      where: {
+        email,
+        status: Not(ApplicationStatusEnum.WITHDRAWN),
+      },
       select: ['legId'],
     });
     const legIds = [...new Set(applications.map((app) => app.legId).filter(Boolean))];
@@ -371,7 +375,7 @@ export class SailorService {
 
     const registered: RaceWithApplication[] = [];
     for (const app of applications) {
-      if (!app.legId) continue;
+      if (!app.legId || app.status === ApplicationStatusEnum.WITHDRAWN) continue;
       const legRaces = racesByLeg.get(app.legId) ?? [];
       for (const race of legRaces) {
         const serialized = await this.raceWithCount(race);
@@ -452,7 +456,11 @@ export class SailorService {
       ? Math.round((positions.reduce((s, p) => s + p, 0) / positions.length) * 10) / 10
       : null;
 
-    const appliedLegIds = new Set(applications.map((a) => a.legId));
+    const appliedLegIds = new Set(
+      applications
+        .filter((a) => a.status !== ApplicationStatusEnum.WITHDRAWN)
+        .map((a) => a.legId),
+    );
     const openRaces = await this.racesRepo.find({
       where: { status: RaceStatusEnum.OPEN },
       relations: ['leg'],
@@ -495,7 +503,7 @@ export class SailorService {
         bestPosition,
         avgPosition,
         daysUntilNextRace,
-        totalApplications: applications.length,
+        totalApplications: applications.filter((a) => a.status !== ApplicationStatusEnum.WITHDRAWN).length,
       },
       nextRace,
       upcomingRaces: upcoming,
@@ -535,7 +543,7 @@ export class SailorService {
 
     const fleetSize =
       raceResult?.fleetSize ??
-      (await this.applicationsRepo.count({ where: { legId: race.legId } }));
+      (await this.applicationsRepo.count({ where: countedApplicationWhere(race.legId) }));
 
     const raceStartedAt = race.raceState?.startedAt as string | undefined;
     const checkpoints =

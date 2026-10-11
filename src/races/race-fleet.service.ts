@@ -13,6 +13,7 @@ import { ApplicationStatusEnum, UserRoleEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
 import { TrackPointsService } from '../track-points/track-points.service';
 import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
+import { countedApplicationWhere } from '../common/utils/active-applications';
 
 const FLEET_COLORS = [
   '#0ea5e9',
@@ -110,7 +111,7 @@ export class RaceFleetService {
     this.assertCanManageRace(race, user);
 
     const applications = await this.applicationsRepo.find({
-      where: { legId: race.legId! },
+      where: countedApplicationWhere(race.legId!),
       relations: ['boat'],
       order: { createdAt: 'ASC' },
     });
