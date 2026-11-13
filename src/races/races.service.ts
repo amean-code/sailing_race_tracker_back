@@ -2222,6 +2222,17 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async getPublicLiveTrails(raceId: string) {
+    const race = await this.loadRace(raceId);
+    if (
+      race.status !== RaceStatusEnum.OPEN &&
+      race.status !== RaceStatusEnum.IN_PROGRESS &&
+      race.status !== RaceStatusEnum.FINISHED
+    ) {
+      throw new NotFoundException('Yarış bulunamadı');
+    }
+    return this.getLiveTrails(raceId);
+  }
 
   async getLiveTrails(raceId: string, user?: SessionUser) {
     const race = await this.loadRace(raceId);

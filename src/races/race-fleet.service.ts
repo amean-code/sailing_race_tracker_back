@@ -9,13 +9,18 @@ import { Repository } from 'typeorm';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Race } from '../entities/race.entity';
 import { Boat } from '../entities/boat.entity';
-import { ApplicationStatusEnum, UserRoleEnum } from '../common/constants';
+import { ApplicationStatusEnum, RaceStatusEnum, UserRoleEnum } from '../common/constants';
 import { SessionUser } from '../common/decorators';
 import { TrackPointsService } from '../track-points/track-points.service';
 import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
 import { countedApplicationWhere } from '../common/utils/active-applications';
 import { resolveCourseIdForGroup } from '../common/utils/race-group-mode';
 
+const PUBLIC_WATCH_STATUSES = new Set<RaceStatusEnum>([
+  RaceStatusEnum.OPEN,
+  RaceStatusEnum.IN_PROGRESS,
+  RaceStatusEnum.FINISHED,
+]);
 
 const FLEET_COLORS = [
   '#0ea5e9',
@@ -114,6 +119,57 @@ export class RaceFleetService {
     return race;
   }
 
+  /** İzleyici sayfası: giriş gerekmez. E-posta, telefon ve cihaz kimliği dönmez. */
+  async getPublicCompetitors(raceId: string) {
+    const race = await this.racesRepo.findOne({ where: { id: raceId } });
+    if (!race || !PUBLIC_WATCH_STATUSES.has(race.status)) {
+      throw new NotFoundException('Yarış bulunamadı');
+    }
+    if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
+
+    const applications = await this.applicationsRepo.find({
+      where: countedApplicationWhere(race.legId),
+      relations: ['boat'],
+      order: { createdAt: 'ASC' },
+    });
+
+    const latestByBoat = await this.trackPointsService.findLatestByRace(raceId);
+
+    return {
+      competitors: applications.map((app, index) => {
+        const boat = app.boat ?? null;
+        const raw = app.boatId ? latestByBoat.get(app.boatId) ?? null : null;
+        const identity = resolveApplicationBoatIdentity(app);
+        const position = raw
+          ? {
+              lat: raw.lat,
+              lng: raw.lng,
+              heading: raw.heading,
+              recordedAt: raw.recordedAt,
+            }
+          : null;
+        return {
+          application: {
+            id: app.id,
+            status: app.status,
+            boatName: identity.boatName,
+            sailNumber: identity.sailNumber,
+            boatId: app.boatId,
+          },
+          boat: boat
+            ? {
+                id: boat.id,
+                name: boat.name,
+                sailNumber: boat.sailNumber,
+                displayColor: boat.displayColor,
+              }
+            : null,
+          position,
+          displayColor: boat?.displayColor ?? this.pickColor(index),
+        };
+      }),
+    };
+  }
 
   async getCompetitors(raceId: string, user: SessionUser) {
     const race = await this.loadRaceWithLeg(raceId);

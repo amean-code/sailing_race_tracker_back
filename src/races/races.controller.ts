@@ -53,6 +53,20 @@ export class RacesController {
     return { races };
   }
 
+  @Public()
+  @Get('public/:id/fleet')
+  @ApiOperation({ summary: 'İzleyici: canlı tekne konumları (giriş gerekmez)' })
+  async getPublicFleet(@Param('id') id: string) {
+    return this.raceFleetService.getPublicCompetitors(id);
+  }
+
+  @Public()
+  @Get('public/:id/live-trails')
+  @ApiOperation({ summary: 'İzleyici: canlı rotalar (giriş gerekmez)' })
+  async getPublicLiveTrails(@Param('id') id: string) {
+    const trails = await this.racesService.getPublicLiveTrails(id);
+    return { trails };
+  }
 
   @Public()
   @Post('public/:id/applications')
