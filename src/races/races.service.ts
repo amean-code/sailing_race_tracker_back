@@ -34,6 +34,8 @@ import {
   RaceApplicationDto,
   UpdateRaceDto,
   RaceActionDto,
+  GroupStartConfigDto,
+  GroupStartActionDto,
 } from './dto/race.dto';
 import { RecordCheckpointPassDto } from './dto/checkpoint-pass.dto';
 import { ReviewRaceResultDto } from './dto/review-race-result.dto';
@@ -56,6 +58,17 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import ExcelJS from 'exceljs';
 import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
+import {
+  earliestGroupScheduledStart,
+  patchGroupEntry,
+  readGroupMode,
+  RaceGroupMode,
+  RaceGroupModeEntry,
+  resolveCourseIdForGroup,
+  resolveStartedAtForGroup,
+  writeGroupMode,
+} from '../common/utils/race-group-mode';
+import { countedApplicationWhere } from '../common/utils/active-applications';
 
 export type RaceResultsExportFormat = 'csv' | 'xlsx';
 
@@ -175,17 +188,32 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     if (this.processingScheduledStarts) return;
     this.processingScheduledStarts = true;
     try {
-      const openRaces = await this.racesRepo.find({
-        where: { status: RaceStatusEnum.OPEN },
+      const candidates = await this.racesRepo.find({
+        where: [
+          { status: RaceStatusEnum.OPEN },
+          { status: RaceStatusEnum.IN_PROGRESS },
+        ],
         relations: ['course'],
       });
       const now = Date.now();
-      for (const race of openRaces) {
-        const scheduledIso = race.raceState?.scheduledStartAt;
-        if (typeof scheduledIso !== 'string') continue;
-        const fireAt = new Date(scheduledIso).getTime();
-        if (!Number.isFinite(fireAt) || fireAt > now) continue;
+      for (const race of candidates) {
         try {
+          const groupMode = readGroupMode(race.raceState);
+          if (groupMode && !groupMode.sameStart) {
+            for (const g of groupMode.groups) {
+              if (g.startedAt || !g.scheduledStartAt) continue;
+              const fireAt = new Date(g.scheduledStartAt).getTime();
+              if (!Number.isFinite(fireAt) || fireAt > now) continue;
+              await this.startGroupAtScheduledTime(race.id, g.groupId);
+            }
+            continue;
+          }
+
+          if (race.status !== RaceStatusEnum.OPEN) continue;
+          const scheduledIso = race.raceState?.scheduledStartAt;
+          if (typeof scheduledIso !== 'string') continue;
+          const fireAt = new Date(scheduledIso).getTime();
+          if (!Number.isFinite(fireAt) || fireAt > now) continue;
           await this.startRaceAtScheduledTime(race);
         } catch (err: any) {
           this.logger.error(`Scheduled start failed for race ${race.id}: ${err?.message || err}`);
@@ -194,6 +222,43 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.processingScheduledStarts = false;
     }
+  }
+
+  private async ensureCourseSnapshot(race: Race) {
+    if (race.courseSnapshot || !race.courseId) return;
+    const courseForSnapshot =
+      race.course ||
+      (await this.coursesRepo.findOne({ where: { id: race.courseId } }));
+    if (courseForSnapshot) {
+      race.courseSnapshot = JSON.parse(JSON.stringify(courseForSnapshot));
+    }
+  }
+
+  private async syncBoatCoursesFromGroupMode(race: Race) {
+    if (!race.legId) return;
+    const apps = await this.applicationsRepo.find({
+      where: countedApplicationWhere(race.legId),
+      relations: ['boat'],
+    });
+    for (const app of apps) {
+      if (!app.boat) continue;
+      const courseId = resolveCourseIdForGroup(race, app.groupId);
+      if (app.boat.courseId !== courseId) {
+        app.boat.courseId = courseId;
+        await this.boatsRepo.save(app.boat);
+      }
+    }
+  }
+
+  private markAllGroupsStarted(groupMode: RaceGroupMode, startedAt: string): RaceGroupMode {
+    return {
+      ...groupMode,
+      groups: groupMode.groups.map((g) => ({
+        ...g,
+        startedAt: g.startedAt || startedAt,
+        scheduledStartAt: null,
+      })),
+    };
   }
 
   private async startRaceAtScheduledTime(race: Race) {
@@ -207,26 +272,276 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     const startedAt = new Date().toISOString();
     fresh.status = RaceStatusEnum.IN_PROGRESS;
-
-    if (!fresh.courseSnapshot && fresh.courseId) {
-      const courseForSnapshot =
-        fresh.course ||
-        (await this.coursesRepo.findOne({ where: { id: fresh.courseId } }));
-      if (courseForSnapshot) {
-        fresh.courseSnapshot = JSON.parse(JSON.stringify(courseForSnapshot));
-      }
-    }
+    await this.ensureCourseSnapshot(fresh);
 
     let state = { ...(fresh.raceState || {}) };
     state.startedAt = startedAt;
     delete state.scheduledStartAt;
+    const groupMode = readGroupMode(state);
+    if (groupMode) {
+      state = writeGroupMode(state, this.markAllGroupsStarted(groupMode, startedAt));
+    }
     state = this.clearPreStartTracking(state);
     fresh.raceState = state;
 
     const saved = await this.racesRepo.save(fresh);
+    await this.syncBoatCoursesFromGroupMode(saved);
     this.logger.log(`Race ${saved.id} auto-started from scheduledStartAt`);
     this.eventEmitter.emit('race.started', { raceId: saved.id });
     this.emitRaceUpdated(saved);
+  }
+
+  private async startGroupAtScheduledTime(raceId: string, groupId: string) {
+    const fresh = await this.racesRepo.findOne({
+      where: { id: raceId },
+      relations: ['course'],
+    });
+    if (!fresh) return;
+    if (
+      fresh.status !== RaceStatusEnum.OPEN &&
+      fresh.status !== RaceStatusEnum.IN_PROGRESS
+    ) {
+      return;
+    }
+
+    let groupMode = readGroupMode(fresh.raceState);
+    if (!groupMode || groupMode.sameStart) return;
+    const entry = groupMode.groups.find((g) => g.groupId === groupId);
+    if (!entry || entry.startedAt || !entry.scheduledStartAt) return;
+
+    const startedAt = new Date().toISOString();
+    const wasOpen = fresh.status === RaceStatusEnum.OPEN;
+    if (wasOpen) {
+      fresh.status = RaceStatusEnum.IN_PROGRESS;
+      await this.ensureCourseSnapshot(fresh);
+    }
+
+    groupMode = patchGroupEntry(groupMode, groupId, {
+      startedAt,
+      scheduledStartAt: null,
+    });
+
+    let state = { ...(fresh.raceState || {}) };
+    if (!state.startedAt) state.startedAt = startedAt;
+    state = writeGroupMode(state, groupMode);
+
+    const stillPending = groupMode.groups.some((g) => g.scheduledStartAt && !g.startedAt);
+    if (!stillPending) {
+      delete state.scheduledStartAt;
+      state = this.clearPreStartTracking(state);
+    } else {
+      const next = earliestGroupScheduledStart(groupMode);
+      if (next) {
+        state.scheduledStartAt = next;
+        state = this.activatePreStartTracking(state, next);
+      }
+    }
+    fresh.raceState = state;
+
+    const saved = await this.racesRepo.save(fresh);
+    await this.syncBoatCoursesFromGroupMode(saved);
+    this.logger.log(`Race ${saved.id} group ${groupId} auto-started`);
+    if (wasOpen) {
+      this.eventEmitter.emit('race.started', { raceId: saved.id });
+    }
+    this.emitRaceUpdated(saved);
+  }
+
+  async applyGroupStartConfig(
+    id: string,
+    dto: GroupStartConfigDto,
+    user: SessionUser,
+  ) {
+    const race = await this.loadRace(id);
+    this.assertCanManageRace(race, user);
+
+    if (!dto.groups?.length) {
+      throw new BadRequestException('En az bir grup gerekli.');
+    }
+
+    const courseIdsNeeded = new Set<string>();
+    if (dto.sameCourse) {
+      const shared = dto.courseId?.trim() || dto.groups[0]?.courseId?.trim();
+      if (!shared) throw new BadRequestException('Ortak parkur seçilmelidir.');
+      courseIdsNeeded.add(shared);
+    } else {
+      for (const g of dto.groups) {
+        const cid = g.courseId?.trim();
+        if (!cid) {
+          throw new BadRequestException(`Grup için parkur seçilmedi: ${g.groupName || g.groupId}`);
+        }
+        courseIdsNeeded.add(cid);
+      }
+    }
+
+    const courses = await this.coursesRepo.find({
+      where: { id: In([...courseIdsNeeded]) },
+    });
+    const courseById = new Map(courses.map((c) => [c.id, c]));
+    for (const cid of courseIdsNeeded) {
+      if (!courseById.has(cid)) {
+        throw new NotFoundException(`Parkur bulunamadı: ${cid}`);
+      }
+    }
+
+    const sharedCourseId = dto.sameCourse
+      ? (dto.courseId?.trim() || dto.groups[0].courseId!.trim())
+      : null;
+
+    const groups: RaceGroupModeEntry[] = dto.groups.map((g) => {
+      const courseId = dto.sameCourse
+        ? sharedCourseId
+        : (g.courseId?.trim() || null);
+      const course = courseId ? courseById.get(courseId) : null;
+      return {
+        groupId: g.groupId,
+        groupName: g.groupName || g.groupId,
+        courseId,
+        courseSnapshot: course ? JSON.parse(JSON.stringify(course)) : null,
+        scheduledStartAt: null,
+        startedAt: null,
+      };
+    });
+
+    const groupMode: RaceGroupMode = {
+      sameCourse: dto.sameCourse,
+      sameStart: dto.sameStart,
+      groups,
+    };
+
+    if (dto.sameCourse && sharedCourseId) {
+      race.courseId = sharedCourseId;
+      (race as Race & { course?: Course | null }).course = null;
+      const course = courseById.get(sharedCourseId)!;
+      race.courseSnapshot = JSON.parse(JSON.stringify(course));
+    } else if (!dto.sameCourse) {
+      // Keep race.courseId as first group's course for legacy map views.
+      const firstCourseId = groups[0]?.courseId ?? null;
+      if (firstCourseId) {
+        race.courseId = firstCourseId;
+        (race as Race & { course?: Course | null }).course = null;
+        const course = courseById.get(firstCourseId);
+        race.courseSnapshot = course ? JSON.parse(JSON.stringify(course)) : null;
+      }
+    }
+
+    let state = { ...(race.raceState || {}) };
+    state = writeGroupMode(state, groupMode);
+    race.raceState = state;
+
+    const saved = await this.racesRepo.save(race);
+    await this.syncBoatCoursesFromGroupMode(saved);
+    this.emitRaceUpdated(saved);
+    return this.findOne(saved.id);
+  }
+
+  async handleGroupStartAction(
+    id: string,
+    dto: GroupStartActionDto,
+    user: SessionUser,
+  ) {
+    const race = await this.loadRace(id);
+    this.assertCanManageRace(race, user);
+
+    let groupMode = readGroupMode(race.raceState);
+    if (!groupMode) {
+      throw new BadRequestException('Grup start yapılandırması yok.');
+    }
+    if (groupMode.sameStart) {
+      throw new BadRequestException(
+        'Aynı start modunda grup bazlı start kullanılamaz; yarış startını kullanın.',
+      );
+    }
+
+    const entry = groupMode.groups.find((g) => g.groupId === dto.groupId);
+    if (!entry) throw new BadRequestException('Grup bulunamadı.');
+
+    if (dto.action === 'cancel_schedule') {
+      groupMode = patchGroupEntry(groupMode, dto.groupId, { scheduledStartAt: null });
+      let state = writeGroupMode({ ...(race.raceState || {}) }, groupMode);
+      const next = earliestGroupScheduledStart(groupMode);
+      if (next) {
+        state.scheduledStartAt = next;
+        state = this.activatePreStartTracking(state, next);
+      } else {
+        delete state.scheduledStartAt;
+        state = this.clearPreStartTracking(state);
+      }
+      race.raceState = state;
+      const saved = await this.racesRepo.save(race);
+      this.emitRaceUpdated(saved);
+      return this.findOne(saved.id);
+    }
+
+    if (dto.action === 'schedule') {
+      if (entry.startedAt) {
+        throw new BadRequestException('Bu grup zaten start aldı.');
+      }
+      let scheduledIso = dto.scheduledStartAt;
+      if (!scheduledIso) {
+        if (!dto.delayMinutes) {
+          throw new BadRequestException('delayMinutes veya scheduledStartAt gerekli.');
+        }
+        scheduledIso = new Date(Date.now() + dto.delayMinutes * 60 * 1000).toISOString();
+      }
+      groupMode = patchGroupEntry(groupMode, dto.groupId, {
+        scheduledStartAt: scheduledIso,
+      });
+      let state = writeGroupMode({ ...(race.raceState || {}) }, groupMode);
+      const next = earliestGroupScheduledStart(groupMode)!;
+      state.scheduledStartAt = next;
+      state = this.activatePreStartTracking(state, next);
+      race.raceState = state;
+      const saved = await this.racesRepo.save(race);
+      this.eventEmitter.emit('race.countdown.started', {
+        raceId: saved.id,
+        scheduledStartAt: next,
+        groupId: dto.groupId,
+        userId: user.sub,
+      });
+      this.emitRaceUpdated(saved);
+      return this.findOne(saved.id);
+    }
+
+    if (dto.action === 'start') {
+      if (entry.startedAt) {
+        throw new BadRequestException('Bu grup zaten start aldı.');
+      }
+      const startedAt = new Date().toISOString();
+      const wasOpen = race.status === RaceStatusEnum.OPEN;
+      if (wasOpen) {
+        race.status = RaceStatusEnum.IN_PROGRESS;
+        await this.ensureCourseSnapshot(race);
+      }
+      groupMode = patchGroupEntry(groupMode, dto.groupId, {
+        startedAt,
+        scheduledStartAt: null,
+      });
+      let state = { ...(race.raceState || {}) };
+      if (!state.startedAt) state.startedAt = startedAt;
+      state = writeGroupMode(state, groupMode);
+      const stillPending = groupMode.groups.some((g) => g.scheduledStartAt && !g.startedAt);
+      if (!stillPending) {
+        delete state.scheduledStartAt;
+        state = this.clearPreStartTracking(state);
+      } else {
+        const next = earliestGroupScheduledStart(groupMode);
+        if (next) {
+          state.scheduledStartAt = next;
+          state = this.activatePreStartTracking(state, next);
+        }
+      }
+      race.raceState = state;
+      const saved = await this.racesRepo.save(race);
+      await this.syncBoatCoursesFromGroupMode(saved);
+      if (wasOpen) {
+        this.eventEmitter.emit('race.started', { raceId: saved.id, userId: user.sub });
+      }
+      this.emitRaceUpdated(saved);
+      return this.findOne(saved.id);
+    }
+
+    throw new BadRequestException('Geçersiz grup start işlemi');
   }
 
   private async withCount(race: Race) {
@@ -316,7 +631,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
           ApplicationStatusEnum.DSQ,
         ]),
       },
-      relations: ['boat'],
+      relations: ['boat', 'group'],
       order: { createdAt: 'ASC' },
     });
   }
@@ -532,6 +847,17 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       delete state.finishedAt;
       delete state.durationSeconds;
       delete state.scheduledStartAt;
+      const gm = readGroupMode(state);
+      if (gm) {
+        state = writeGroupMode(state, {
+          ...gm,
+          groups: gm.groups.map((g) => ({
+            ...g,
+            startedAt: null,
+            scheduledStartAt: null,
+          })),
+        });
+      }
       state.restartReason = reason;
       state = this.clearPreStartTracking(state);
       race.raceState = state;
@@ -677,6 +1003,13 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       if (!state.startedAt) {
         state.startedAt = new Date().toISOString();
       }
+      const gm = readGroupMode(state);
+      if (gm && (gm.sameStart || !gm.groups.some((g) => g.startedAt))) {
+        state = writeGroupMode(
+          state,
+          this.markAllGroupsStarted(gm, String(state.startedAt)),
+        );
+      }
       state = this.clearPreStartTracking(state);
       race.raceState = state;
       countdownStarted = false;
@@ -684,8 +1017,11 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     const saved = await this.racesRepo.save(race);
 
-    // Fleet boats inherit the race course for GPS / sailor tracking — keep them in sync.
-    if (saved.courseId !== previousCourseId) {
+    const groupModeAfter = readGroupMode(saved.raceState);
+    if (groupModeAfter && !groupModeAfter.sameCourse) {
+      await this.syncBoatCoursesFromGroupMode(saved);
+    } else if (saved.courseId !== previousCourseId) {
+      // Fleet boats inherit the race course for GPS / sailor tracking — keep them in sync.
       await this.boatsRepo.update(
         { raceId: saved.id },
         { courseId: saved.courseId },
@@ -953,15 +1289,35 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     return this.getStandings(raceId);
   }
 
+  private getTargetsFromCheckpoints(checkpoints: any[] | null | undefined): any[] {
+    if (!Array.isArray(checkpoints)) return [];
+    return checkpoints.filter((cp) => {
+      const k = cp.kind || cp.type;
+      return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
+    });
+  }
+
   private getRaceTargets(race: Race): any[] {
     const checkpoints =
       (race.courseSnapshot?.checkpoints as any[]) ??
       (race.course?.checkpoints as any[]) ??
       [];
-    return checkpoints.filter((cp) => {
-      const k = cp.kind || cp.type;
-      return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
-    });
+    return this.getTargetsFromCheckpoints(checkpoints);
+  }
+
+  private getTargetsForGroup(
+    race: Race,
+    groupMode: RaceGroupMode | null,
+    groupId: string | null | undefined,
+  ): any[] {
+    if (groupMode && !groupMode.sameCourse && groupId) {
+      const entry = groupMode.groups.find((g) => g.groupId === groupId);
+      const fromSnap = this.getTargetsFromCheckpoints(
+        entry?.courseSnapshot?.checkpoints as any[] | undefined,
+      );
+      if (fromSnap.length > 0) return fromSnap;
+    }
+    return this.getRaceTargets(race);
   }
 
   /**
@@ -1373,25 +1729,23 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     return row;
   }
 
-  private async buildRaceResultsTable(id: string): Promise<{
-    raceTitle: string;
+  private buildResultsSheetForApps(opts: {
+    race: Race;
+    applications: RaceApplication[];
+    results: RaceResult[];
+    allPasses: CheckpointPass[];
+    targets: any[];
+    sheetLabel?: string;
+    groupMode: RaceGroupMode | null;
+  }): {
+    sheetName: string;
     headers: string[];
     rows: string[][];
-    metaFirstRow: string[];
+    metaRows: string[][];
     metaLastRow: string[];
-  }> {
-    const race = await this.loadRace(id);
-    if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
-
-    const applications = await this.getLegApplications(race.legId);
-    const results = await this.resultsRepo.find({ where: { raceId: id } });
+  } {
+    const { race, applications, results, allPasses, targets, groupMode } = opts;
     const resultByApp = new Map(results.map((r) => [r.applicationId, r]));
-
-    const allPasses = await this.checkpointPassRepo.find({
-      where: { raceId: id },
-    });
-
-    const targets = this.getRaceTargets(race);
     const finishIndex = targets.length > 0 ? targets.length - 1 : -1;
 
     const checkpointHeaders = targets.flatMap((cp, index) => {
@@ -1405,29 +1759,67 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     const headers = [
       'Sıra',
+      'Grup',
       'Tekne Adı',
       'Yelken No',
       'Sınıf',
       'Yarışmacı',
+      'Start (Türkiye)',
       'Durum',
       ...checkpointHeaders,
     ];
 
-    const startedAtRaw = race.raceState?.startedAt;
     const finishedAtRaw = race.raceState?.finishedAt;
-    const metaFirstRow = this.padExportMetaRow(
-      'Hakem Start',
-      this.formatPassTime(startedAtRaw ? new Date(String(startedAtRaw)) : null),
-      headers.length,
-    );
+    const metaRows: string[][] = [];
+    if (groupMode && !groupMode.sameStart) {
+      const groupIdsInSheet = new Set(
+        applications.map((a) => a.groupId).filter(Boolean) as string[],
+      );
+      const groupsForMeta =
+        groupIdsInSheet.size > 0
+          ? groupMode.groups.filter((g) => groupIdsInSheet.has(g.groupId))
+          : groupMode.groups;
+      for (const g of groupsForMeta) {
+        metaRows.push(
+          this.padExportMetaRow(
+            `Hakem Start — ${g.groupName}`,
+            this.formatPassTime(g.startedAt ? new Date(g.startedAt) : null),
+            headers.length,
+          ),
+        );
+      }
+      if (metaRows.length === 0) {
+        const startedAtRaw = race.raceState?.startedAt;
+        metaRows.push(
+          this.padExportMetaRow(
+            'Hakem Start',
+            this.formatPassTime(startedAtRaw ? new Date(String(startedAtRaw)) : null),
+            headers.length,
+          ),
+        );
+      }
+    } else {
+      const startedAtRaw = race.raceState?.startedAt;
+      metaRows.push(
+        this.padExportMetaRow(
+          'Hakem Start',
+          this.formatPassTime(startedAtRaw ? new Date(String(startedAtRaw)) : null),
+          headers.length,
+        ),
+      );
+    }
+
     const metaLastRow = this.padExportMetaRow(
       'Hakem Finish',
       this.formatPassTime(finishedAtRaw ? new Date(String(finishedAtRaw)) : null),
       headers.length,
     );
 
+    const appIdSet = new Set(applications.map((a) => a.id));
+    const scopedPasses = allPasses.filter((p) => appIdSet.has(p.applicationId));
+
     const passesByApp = new Map<string, CheckpointPass[]>();
-    for (const pass of allPasses) {
+    for (const pass of scopedPasses) {
       const list = passesByApp.get(pass.applicationId) ?? [];
       list.push(pass);
       passesByApp.set(pass.applicationId, list);
@@ -1435,7 +1827,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
 
     const crossingRankByAppAndCheckpoint = new Map<string, number>();
     for (let checkpointIndex = 0; checkpointIndex < targets.length; checkpointIndex += 1) {
-      const passesAtCheckpoint = allPasses
+      const passesAtCheckpoint = scopedPasses
         .filter((pass) => pass.checkpointIndex === checkpointIndex)
         .sort((a, b) => {
           const timeDifference = a.passedAt.getTime() - b.passedAt.getTime();
@@ -1506,24 +1898,109 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       });
 
       const identity = resolveApplicationBoatIdentity(app);
+      const groupName =
+        app.group?.name ||
+        groupMode?.groups.find((g) => g.groupId === app.groupId)?.groupName ||
+        (app.groupId ? 'Grup' : 'Grup yok');
+      const startIso = resolveStartedAtForGroup(race.raceState, app.groupId);
       return [
         raceResult?.finishPosition != null ? String(raceResult.finishPosition) : '-',
+        groupName,
         identity.boatName,
         identity.sailNumber,
         app.boat?.boatClass || '',
         app.name || '',
+        this.formatPassTime(startIso ? new Date(startIso) : null),
         statusLabel,
         ...checkpointCells,
       ];
     });
 
-    return {
-      raceTitle: race.title || 'race',
-      headers,
-      rows,
-      metaFirstRow,
-      metaLastRow,
-    };
+    const rawName = opts.sheetLabel || 'Sonuçlar';
+    const sheetName = String(rawName).replace(/[\\/*?:\[\]]/g, '_').slice(0, 31) || 'Sonuclar';
+
+    return { sheetName, headers, rows, metaRows, metaLastRow };
+  }
+
+  private async buildRaceResultsExportData(id: string): Promise<{
+    raceTitle: string;
+    sheets: Array<{
+      sheetName: string;
+      headers: string[];
+      rows: string[][];
+      metaRows: string[][];
+      metaLastRow: string[];
+    }>;
+  }> {
+    const race = await this.loadRace(id);
+    if (!race.legId) throw new BadRequestException('Bu yarış bir ayağa bağlı değil.');
+
+    const applications = await this.getLegApplications(race.legId);
+    const results = await this.resultsRepo.find({ where: { raceId: id } });
+    const allPasses = await this.checkpointPassRepo.find({
+      where: { raceId: id },
+    });
+    const groupMode = readGroupMode(race.raceState);
+
+    // Different courses per group → one sheet per group (plus ungrouped if any).
+    if (groupMode && !groupMode.sameCourse) {
+      const sheets = [];
+      for (const g of groupMode.groups) {
+        const apps = applications.filter((a) => a.groupId === g.groupId);
+        if (apps.length === 0) continue;
+        const targets = this.getTargetsForGroup(race, groupMode, g.groupId);
+        sheets.push(
+          this.buildResultsSheetForApps({
+            race,
+            applications: apps,
+            results,
+            allPasses,
+            targets,
+            sheetLabel: g.groupName || g.groupId,
+            groupMode,
+          }),
+        );
+      }
+      const ungrouped = applications.filter(
+        (a) => !a.groupId || !groupMode.groups.some((g) => g.groupId === a.groupId),
+      );
+      if (ungrouped.length > 0) {
+        sheets.push(
+          this.buildResultsSheetForApps({
+            race,
+            applications: ungrouped,
+            results,
+            allPasses,
+            targets: this.getRaceTargets(race),
+            sheetLabel: 'Grup yok',
+            groupMode,
+          }),
+        );
+      }
+      if (sheets.length === 0) {
+        sheets.push(
+          this.buildResultsSheetForApps({
+            race,
+            applications,
+            results,
+            allPasses,
+            targets: this.getRaceTargets(race),
+            groupMode,
+          }),
+        );
+      }
+      return { raceTitle: race.title || 'race', sheets };
+    }
+
+    const sheet = this.buildResultsSheetForApps({
+      race,
+      applications,
+      results,
+      allPasses,
+      targets: this.getRaceTargets(race),
+      groupMode,
+    });
+    return { raceTitle: race.title || 'race', sheets: [sheet] };
   }
 
   private sanitizeExportFilename(title: string): string {
@@ -1540,47 +2017,57 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     id: string,
     format: RaceResultsExportFormat = 'csv',
   ): Promise<RaceResultsExportFile> {
-    const { raceTitle, headers, rows, metaFirstRow, metaLastRow } =
-      await this.buildRaceResultsTable(id);
+    const { raceTitle, sheets } = await this.buildRaceResultsExportData(id);
     const baseName = this.sanitizeExportFilename(raceTitle);
-    const headerRowIndex = 2;
-    const dataEndRowIndex = headerRowIndex + rows.length;
 
     if (format === 'xlsx') {
       const workbook = new ExcelJS.Workbook();
       workbook.creator = 'Sailing Race Tracker';
       workbook.created = new Date();
-      const sheet = workbook.addWorksheet('Sonuçlar');
-      sheet.addRow(metaFirstRow);
-      sheet.addRow(headers);
-      for (const row of rows) {
-        sheet.addRow(row);
-      }
-      sheet.addRow(metaLastRow);
-      const headerRow = sheet.getRow(headerRowIndex);
-      headerRow.font = { bold: true };
-      headerRow.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-      headerRow.height = 45;
-      headerRow.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFE2E8F0' },
-      };
-      sheet.views = [{ state: 'frozen', ySplit: headerRowIndex }];
-      sheet.autoFilter = {
-        from: { row: headerRowIndex, column: 1 },
-        to: { row: Math.max(dataEndRowIndex, headerRowIndex), column: headers.length },
-      };
-      headers.forEach((_, colIndex) => {
-        const column = sheet.getColumn(colIndex + 1);
-        let max = String(headers[colIndex] || '').length;
-        max = Math.max(max, String(metaFirstRow[colIndex] ?? '').length);
-        max = Math.max(max, String(metaLastRow[colIndex] ?? '').length);
-        for (const row of rows) {
-          max = Math.max(max, String(row[colIndex] ?? '').length);
+
+      for (const sheetData of sheets) {
+        const sheet = workbook.addWorksheet(sheetData.sheetName);
+        for (const metaRow of sheetData.metaRows) {
+          sheet.addRow(metaRow);
         }
-        column.width = Math.min(Math.max(max + 2, 10), 36);
-      });
+        const headerRowIndex = sheetData.metaRows.length + 1;
+        sheet.addRow(sheetData.headers);
+        for (const row of sheetData.rows) {
+          sheet.addRow(row);
+        }
+        sheet.addRow(sheetData.metaLastRow);
+        const dataEndRowIndex = headerRowIndex + sheetData.rows.length;
+        const headerRow = sheet.getRow(headerRowIndex);
+        headerRow.font = { bold: true };
+        headerRow.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        headerRow.height = 45;
+        headerRow.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFE2E8F0' },
+        };
+        sheet.views = [{ state: 'frozen', ySplit: headerRowIndex }];
+        sheet.autoFilter = {
+          from: { row: headerRowIndex, column: 1 },
+          to: {
+            row: Math.max(dataEndRowIndex, headerRowIndex),
+            column: sheetData.headers.length,
+          },
+        };
+        sheetData.headers.forEach((_, colIndex) => {
+          const column = sheet.getColumn(colIndex + 1);
+          let max = String(sheetData.headers[colIndex] || '').length;
+          for (const metaRow of sheetData.metaRows) {
+            max = Math.max(max, String(metaRow[colIndex] ?? '').length);
+          }
+          max = Math.max(max, String(sheetData.metaLastRow[colIndex] ?? '').length);
+          for (const row of sheetData.rows) {
+            max = Math.max(max, String(row[colIndex] ?? '').length);
+          }
+          column.width = Math.min(Math.max(max + 2, 10), 36);
+        });
+      }
+
       const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
       return {
         format: 'xlsx',
@@ -1591,12 +2078,26 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
     }
 
     const escapeCsv = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
+    const primary = sheets[0];
     const csvLines = [
-      metaFirstRow.map(escapeCsv).join(';'),
-      headers.map(escapeCsv).join(';'),
-      ...rows.map((row) => row.map(escapeCsv).join(';')),
-      metaLastRow.map(escapeCsv).join(';'),
+      ...primary.metaRows.map((metaRow) => metaRow.map(escapeCsv).join(';')),
+      primary.headers.map(escapeCsv).join(';'),
+      ...primary.rows.map((row) => row.map(escapeCsv).join(';')),
+      primary.metaLastRow.map(escapeCsv).join(';'),
     ];
+    for (let i = 1; i < sheets.length; i += 1) {
+      const extra = sheets[i];
+      csvLines.push('');
+      csvLines.push(escapeCsv(`--- ${extra.sheetName} ---`));
+      for (const metaRow of extra.metaRows) {
+        csvLines.push(metaRow.map(escapeCsv).join(';'));
+      }
+      csvLines.push(extra.headers.map(escapeCsv).join(';'));
+      for (const row of extra.rows) {
+        csvLines.push(row.map(escapeCsv).join(';'));
+      }
+      csvLines.push(extra.metaLastRow.map(escapeCsv).join(';'));
+    }
     const csv = '\uFEFF' + csvLines.join('\n');
     return {
       format: 'csv',
@@ -1720,6 +2221,7 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
       },
     };
   }
+
 
   async getLiveTrails(raceId: string, user?: SessionUser) {
     const race = await this.loadRace(raceId);

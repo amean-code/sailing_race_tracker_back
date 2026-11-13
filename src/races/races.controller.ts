@@ -13,7 +13,14 @@ import { Response } from 'express';
 import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { RacesService } from './races.service';
 import { RaceFleetService } from './race-fleet.service';
-import { CreateRaceDto, RaceApplicationDto, UpdateRaceDto, RaceActionDto } from './dto/race.dto';
+import {
+  CreateRaceDto,
+  RaceApplicationDto,
+  UpdateRaceDto,
+  RaceActionDto,
+  GroupStartConfigDto,
+  GroupStartActionDto,
+} from './dto/race.dto';
 import { CheckInDto } from './dto/check-in.dto';
 import { RecordCheckpointPassDto } from './dto/checkpoint-pass.dto';
 import { ReviewRaceResultDto } from './dto/review-race-result.dto';
@@ -45,6 +52,7 @@ export class RacesController {
     const races = await this.racesService.findPublic();
     return { races };
   }
+
 
   @Public()
   @Post('public/:id/applications')
@@ -133,6 +141,32 @@ export class RacesController {
     @CurrentUser() user: SessionUser,
   ) {
     const race = await this.racesService.handleRaceAction(id, dto, user);
+    return { race };
+  }
+
+  @Post(':id/group-start-config')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Grup bazlı parkur/start yapılandırması' })
+  async applyGroupStartConfig(
+    @Param('id') id: string,
+    @Body() dto: GroupStartConfigDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    const race = await this.racesService.applyGroupStartConfig(id, dto, user);
+    return { race };
+  }
+
+  @Post(':id/group-start')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Grup bazlı start / zamanlı start / iptal' })
+  async handleGroupStart(
+    @Param('id') id: string,
+    @Body() dto: GroupStartActionDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    const race = await this.racesService.handleGroupStartAction(id, dto, user);
     return { race };
   }
 

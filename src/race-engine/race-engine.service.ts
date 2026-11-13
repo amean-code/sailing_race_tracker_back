@@ -20,6 +20,11 @@ import {
   checkLineCheckpointCrossed,
   normalizeLineCrossing,
 } from './checkpoint-detection';
+import {
+  findGroupEntry,
+  readGroupMode,
+  resolveStartedAtForGroup,
+} from '../common/utils/race-group-mode';
 
 @Injectable()
 export class RaceEngineService {
@@ -111,11 +116,31 @@ export class RaceEngineService {
     });
     if (!app) return;
 
+    const groupMode = readGroupMode(race.raceState);
+    const groupStartedAt = resolveStartedAtForGroup(race.raceState, app.groupId);
+    // Per-group starts: do not record passes until that group's start has fired.
+    if (groupMode && !groupMode.sameStart && !groupStartedAt) {
+      return;
+    }
+
     let checkpoints: any[] = [];
-    if (race.courseSnapshot && Array.isArray(race.courseSnapshot.checkpoints)) {
-      checkpoints = race.courseSnapshot.checkpoints;
-    } else if (race.course && Array.isArray(race.course.checkpoints)) {
-      checkpoints = race.course.checkpoints as any[];
+    if (groupMode && !groupMode.sameCourse && app.groupId) {
+      const entry = findGroupEntry(groupMode, app.groupId);
+      if (entry?.courseSnapshot && Array.isArray(entry.courseSnapshot.checkpoints)) {
+        checkpoints = entry.courseSnapshot.checkpoints as any[];
+      } else if (entry?.courseId) {
+        const groupCourse = await this.coursesRepo.findOne({ where: { id: entry.courseId } });
+        if (groupCourse && Array.isArray(groupCourse.checkpoints)) {
+          checkpoints = groupCourse.checkpoints as any[];
+        }
+      }
+    }
+    if (!checkpoints.length) {
+      if (race.courseSnapshot && Array.isArray(race.courseSnapshot.checkpoints)) {
+        checkpoints = race.courseSnapshot.checkpoints;
+      } else if (race.course && Array.isArray(race.course.checkpoints)) {
+        checkpoints = race.course.checkpoints as any[];
+      }
     }
 
     if (!checkpoints || checkpoints.length === 0) return;
@@ -204,9 +229,12 @@ export class RaceEngineService {
 
         const checkpointId = target.id ?? `CP${checkpointIndex}`;
         let elapsedSeconds: number | null = null;
-        if (race.raceState?.startedAt) {
+        const effectiveStartedAt =
+          groupStartedAt ||
+          (typeof race.raceState?.startedAt === 'string' ? race.raceState.startedAt : null);
+        if (effectiveStartedAt) {
           elapsedSeconds = Math.floor(
-            (new Date(recordedAt).getTime() - new Date(race.raceState.startedAt as string).getTime()) / 1000,
+            (new Date(recordedAt).getTime() - new Date(effectiveStartedAt).getTime()) / 1000,
           );
         } else if (checkpointIndex > 0) {
           const startPass = existingPasses.find((p) => p.checkpointIndex === 0);

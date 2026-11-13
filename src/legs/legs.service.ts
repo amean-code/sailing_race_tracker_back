@@ -13,6 +13,7 @@ import { Race } from '../entities/race.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Boat } from '../entities/boat.entity';
 import { Trophy } from '../entities/trophy.entity';
+import { TrophyGroup } from '../entities/trophy-group.entity';
 import { User } from '../entities/user.entity';
 import {
   ApplicationStatusEnum,
@@ -31,13 +32,30 @@ import {
 import { deleteUploadFile } from '../common/upload';
 import {
   CreateLegDto,
+  CreateLegGroupDto,
   CreateLegRaceDto,
   CreateRaceUnderLegDto,
   UpdateLegDto,
+  UpdateLegGroupDto,
 } from './dto/leg.dto';
 import { RaceApplicationDto } from '../races/dto/race.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+
+function serializeLegGroup(group: TrophyGroup, memberCount = 0) {
+  return {
+    id: group.id,
+    trophyId: group.trophyId ?? null,
+    legId: group.legId ?? null,
+    name: group.name,
+    sortOrder: group.sortOrder,
+    capacity: group.capacity ?? null,
+    memberCount,
+    isFull: group.capacity != null && memberCount >= group.capacity,
+    createdAt: group.createdAt.toISOString(),
+    updatedAt: group.updatedAt.toISOString(),
+  };
+}
 
 @Injectable()
 export class LegsService {
@@ -54,6 +72,8 @@ export class LegsService {
     private readonly boatsRepo: Repository<Boat>,
     @InjectRepository(Trophy)
     private readonly trophiesRepo: Repository<Trophy>,
+    @InjectRepository(TrophyGroup)
+    private readonly groupsRepo: Repository<TrophyGroup>,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
     private readonly notificationsService: NotificationsService,
@@ -575,5 +595,126 @@ export class LegsService {
       email: saved.email,
       createdAt: saved.createdAt.toISOString(),
     };
+  }
+
+  private async groupMemberCount(groupId: string): Promise<number> {
+    return this.applicationsRepo.count({
+      where: {
+        groupId,
+        status: In([ApplicationStatusEnum.APPROVED, ApplicationStatusEnum.CHECKED_IN]),
+      },
+    });
+  }
+
+  private assertStandaloneLegForGroups(leg: Leg) {
+    if (leg.kind === LegKindEnum.TROFE_LEG || leg.trophyId) {
+      throw new BadRequestException(
+        'Trofe ayakları için gruplar trofe üzerinden yönetilir.',
+      );
+    }
+  }
+
+  async listGroups(legId: string, user: SessionUser) {
+    const leg = await this.legsRepo.findOne({ where: { id: legId } });
+    if (!leg) throw new NotFoundException('Ayak bulunamadı');
+    this.assertCanManage(leg, user);
+    this.assertStandaloneLegForGroups(leg);
+
+    const groups = await this.groupsRepo.find({
+      where: { legId },
+      order: { sortOrder: 'ASC', createdAt: 'ASC' },
+    });
+    return Promise.all(
+      groups.map(async (g) => serializeLegGroup(g, await this.groupMemberCount(g.id))),
+    );
+  }
+
+  async createGroup(legId: string, dto: CreateLegGroupDto, user: SessionUser) {
+    const leg = await this.legsRepo.findOne({ where: { id: legId } });
+    if (!leg) throw new NotFoundException('Ayak bulunamadı');
+    this.assertCanManage(leg, user);
+    this.assertStandaloneLegForGroups(leg);
+
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException('Grup adı gerekli');
+
+    const duplicate = await this.groupsRepo.findOne({ where: { legId, name } });
+    if (duplicate) {
+      throw new BadRequestException('Bu isimde bir grup zaten var.');
+    }
+
+    const existingCount = await this.groupsRepo.count({ where: { legId } });
+    const maxSort = await this.groupsRepo
+      .createQueryBuilder('g')
+      .select('MAX(g.sortOrder)', 'max')
+      .where('g.legId = :legId', { legId })
+      .getRawOne<{ max: string | null }>();
+    const nextSort =
+      dto.sortOrder ??
+      (maxSort?.max != null ? Number(maxSort.max) + 1 : 0);
+
+    const group = this.groupsRepo.create({
+      trophyId: null,
+      legId,
+      name,
+      capacity: dto.capacity ?? null,
+      sortOrder: Number.isFinite(nextSort) ? nextSort : existingCount,
+    });
+    const saved = await this.groupsRepo.save(group);
+    return serializeLegGroup(saved, 0);
+  }
+
+  async updateGroup(
+    legId: string,
+    groupId: string,
+    dto: UpdateLegGroupDto,
+    user: SessionUser,
+  ) {
+    const leg = await this.legsRepo.findOne({ where: { id: legId } });
+    if (!leg) throw new NotFoundException('Ayak bulunamadı');
+    this.assertCanManage(leg, user);
+    this.assertStandaloneLegForGroups(leg);
+
+    const group = await this.groupsRepo.findOne({ where: { id: groupId, legId } });
+    if (!group) throw new NotFoundException('Grup bulunamadı');
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('Grup adı gerekli');
+      const duplicate = await this.groupsRepo.findOne({ where: { legId, name } });
+      if (duplicate && duplicate.id !== group.id) {
+        throw new BadRequestException('Bu isimde bir grup zaten var.');
+      }
+      group.name = name;
+    }
+    if (dto.capacity !== undefined) {
+      group.capacity = dto.capacity ?? null;
+    }
+    if (dto.sortOrder !== undefined) {
+      group.sortOrder = dto.sortOrder;
+    }
+
+    const saved = await this.groupsRepo.save(group);
+    return serializeLegGroup(saved, await this.groupMemberCount(saved.id));
+  }
+
+  async removeGroup(legId: string, groupId: string, user: SessionUser) {
+    const leg = await this.legsRepo.findOne({ where: { id: legId } });
+    if (!leg) throw new NotFoundException('Ayak bulunamadı');
+    this.assertCanManage(leg, user);
+    this.assertStandaloneLegForGroups(leg);
+
+    const group = await this.groupsRepo.findOne({ where: { id: groupId, legId } });
+    if (!group) throw new NotFoundException('Grup bulunamadı');
+
+    const memberCount = await this.groupMemberCount(groupId);
+    if (memberCount > 0) {
+      throw new BadRequestException(
+        'Gruba atanmış onaylı başvuru varken silinemez. Önce başvuruları başka gruba taşıyın veya geri çekin.',
+      );
+    }
+
+    await this.groupsRepo.remove(group);
+    return { ok: true };
   }
 }

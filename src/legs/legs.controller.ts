@@ -9,7 +9,13 @@ import {
 } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { LegsService } from './legs.service';
-import { CreateLegDto, CreateRaceUnderLegDto, UpdateLegDto } from './dto/leg.dto';
+import {
+  CreateLegDto,
+  CreateLegGroupDto,
+  CreateRaceUnderLegDto,
+  UpdateLegDto,
+  UpdateLegGroupDto,
+} from './dto/leg.dto';
 import { RaceApplicationDto } from '../races/dto/race.dto';
 import { CurrentUser, Public, Roles, SessionUser } from '../common/decorators';
 import { AUTH_COOKIE } from '../common/constants';
@@ -107,5 +113,53 @@ export class LegsController {
   ) {
     const application = await this.legsService.submitApplication(id, dto, user);
     return { application };
+  }
+
+  @Get(':id/groups')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Regata / tek yarış gruplarını listele' })
+  async listGroups(@Param('id') id: string, @CurrentUser() user: SessionUser) {
+    const groups = await this.legsService.listGroups(id, user);
+    return { groups };
+  }
+
+  @Post(':id/groups')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Regata / tek yarış grubu oluştur' })
+  async createGroup(
+    @Param('id') id: string,
+    @Body() dto: CreateLegGroupDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    const group = await this.legsService.createGroup(id, dto, user);
+    return { group };
+  }
+
+  @Patch(':id/groups/:groupId')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Regata / tek yarış grubunu güncelle' })
+  async updateGroup(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @Body() dto: UpdateLegGroupDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    const group = await this.legsService.updateGroup(id, groupId, dto, user);
+    return { group };
+  }
+
+  @Delete(':id/groups/:groupId')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('COMMITTEE', 'ADMIN', 'SUPER_ADMIN')
+  @ApiOperation({ summary: 'Regata / tek yarış grubunu sil' })
+  async removeGroup(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @CurrentUser() user: SessionUser,
+  ) {
+    return this.legsService.removeGroup(id, groupId, user);
   }
 }

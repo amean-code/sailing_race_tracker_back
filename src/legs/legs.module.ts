@@ -6,6 +6,7 @@ import { Course } from '../entities/course.entity';
 import { RaceApplication } from '../entities/race-application.entity';
 import { Boat } from '../entities/boat.entity';
 import { Trophy } from '../entities/trophy.entity';
+import { TrophyGroup } from '../entities/trophy-group.entity';
 import { User } from '../entities/user.entity';
 import { LegsService } from './legs.service';
 import { LegsController } from './legs.controller';
@@ -15,7 +16,17 @@ import { RaceResult } from '../entities/race-result.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Leg, Race, Course, RaceApplication, Boat, Trophy, User, RaceResult]),
+    TypeOrmModule.forFeature([
+      Leg,
+      Race,
+      Course,
+      RaceApplication,
+      Boat,
+      Trophy,
+      TrophyGroup,
+      User,
+      RaceResult,
+    ]),
     NotificationsModule,
   ],
   controllers: [LegsController],

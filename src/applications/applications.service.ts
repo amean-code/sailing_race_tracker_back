@@ -6,7 +6,12 @@ import { RaceApplication } from '../entities/race-application.entity';
 import { Boat } from '../entities/boat.entity';
 import { Race } from '../entities/race.entity';
 import { TrophyGroup } from '../entities/trophy-group.entity';
-import { ApplicationStatusEnum, PaymentStatusEnum, UserRoleEnum } from '../common/constants';
+import {
+  ApplicationStatusEnum,
+  PaymentStatusEnum,
+  RaceStatusEnum,
+  UserRoleEnum,
+} from '../common/constants';
 import { SessionUser } from '../common/decorators';
 import { BulkDeleteApplicationDto, BulkUpdateApplicationDto, ReviewPaymentDto, UpdateApplicationDto } from './dto/application.dto';
 import {
@@ -19,6 +24,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
 import { releaseBoatBoundToApplication } from '../common/utils/active-applications';
+import { resolveCourseIdForGroup } from '../common/utils/race-group-mode';
 
 const APP_STATUSES = new Set<string>([
   ApplicationStatusEnum.PENDING,
@@ -94,11 +100,26 @@ export class ApplicationsService {
     return race.legId;
   }
 
+  /**
+   * Prefer the race the referee is actually running (IN_PROGRESS, then OPEN)
+   * so device GPS / boat.raceId land on the live race in multi-race legs.
+   */
   private async firstRaceForLeg(legId: string | null | undefined): Promise<Race | null> {
     if (!legId) return null;
+    const order = { raceOrder: 'ASC' as const, startDate: 'ASC' as const, createdAt: 'ASC' as const };
+    const inProgress = await this.racesRepo.findOne({
+      where: { legId, status: RaceStatusEnum.IN_PROGRESS },
+      order,
+    });
+    if (inProgress) return inProgress;
+    const open = await this.racesRepo.findOne({
+      where: { legId, status: RaceStatusEnum.OPEN },
+      order,
+    });
+    if (open) return open;
     return this.racesRepo.findOne({
       where: { legId },
-      order: { raceOrder: 'ASC', startDate: 'ASC', createdAt: 'ASC' },
+      order,
     });
   }
 
@@ -170,7 +191,7 @@ export class ApplicationsService {
     // Mevcut tekniyi yarışa bağla — yeni kayıt oluşturma
     boat.applicationId = app.id;
     boat.raceId = race.id;
-    boat.courseId = race.courseId ?? null;
+    boat.courseId = resolveCourseIdForGroup(race, app.groupId);
     boat.status = 'registered';
     if (!boat.displayColor) {
       boat.displayColor = this.pickColor(existingCount);
@@ -210,7 +231,9 @@ export class ApplicationsService {
   }
 
   /**
-   * Assign group on trophy-leg approval. Soft capacity: over-capacity requires temporary flag.
+   * Assign group on approval.
+   * - Trophy legs: group is always required (trophy-owned groups).
+   * - Regata / single: group required when the leg has groups; otherwise optional.
    */
   private async assignGroupForApproval(
     app: RaceApplication,
@@ -222,31 +245,51 @@ export class ApplicationsService {
     },
   ) {
     const trophyId = app.leg?.trophyId ?? null;
-    if (!trophyId) {
+    const legId = app.legId ?? app.leg?.id ?? null;
+
+    const groupId = opts.groupId?.trim() || app.groupId || null;
+
+    let group: TrophyGroup | null = null;
+    if (groupId) {
+      if (trophyId) {
+        group = await this.groupsRepo.findOne({ where: { id: groupId, trophyId } });
+        if (!group) {
+          throw new BadRequestException('Seçilen grup bu trofeye ait değil.');
+        }
+      } else if (legId) {
+        group = await this.groupsRepo.findOne({ where: { id: groupId, legId } });
+        if (!group) {
+          throw new BadRequestException('Seçilen grup bu yarışa / ayaka ait değil.');
+        }
+      } else {
+        throw new BadRequestException('Grup ataması için ayak bulunamadı.');
+      }
+    } else if (trophyId) {
+      throw new BadRequestException(
+        'Trofe başvurusunu onaylamak için bir grup seçilmelidir.',
+      );
+    } else if (legId) {
+      const legGroupCount = await this.groupsRepo.count({ where: { legId } });
+      if (legGroupCount > 0) {
+        throw new BadRequestException(
+          'Bu yarışta gruplar tanımlı; onaylamak için bir grup seçilmelidir.',
+        );
+      }
+      app.groupId = null;
+      app.group = null;
+      app.temporaryGroupAssignment = false;
+      return;
+    } else {
       app.groupId = null;
       app.group = null;
       app.temporaryGroupAssignment = false;
       return;
     }
 
-    const groupId = opts.groupId?.trim() || app.groupId;
-    if (!groupId) {
-      throw new BadRequestException(
-        'Trofe başvurusunu onaylamak için bir grup seçilmelidir.',
-      );
-    }
-
-    const group = await this.groupsRepo.findOne({
-      where: { id: groupId, trophyId },
-    });
-    if (!group) {
-      throw new BadRequestException('Seçilen grup bu trofeye ait değil.');
-    }
-
-    const memberCount = await this.countGroupMembers(groupId, [app.id]);
+    const memberCount = await this.countGroupMembers(group!.id, [app.id]);
     const projected = memberCount + 1 + (opts.pendingBatchCount ?? 0);
     const isOverCapacity =
-      group.capacity != null && projected > group.capacity;
+      group!.capacity != null && projected > group!.capacity;
 
     if (isOverCapacity && !opts.temporaryGroupAssignment) {
       throw new BadRequestException(
@@ -254,8 +297,8 @@ export class ApplicationsService {
       );
     }
 
-    app.groupId = group.id;
-    app.group = group;
+    app.groupId = group!.id;
+    app.group = group!;
     app.temporaryGroupAssignment = Boolean(isOverCapacity && opts.temporaryGroupAssignment);
   }
 
@@ -344,12 +387,13 @@ export class ApplicationsService {
       app.status = nextStatus;
 
       if (nextStatus === ApplicationStatusEnum.APPROVED) {
+        const usesGroup = Boolean(dto.groupId || app.leg?.trophyId);
         await this.assignGroupForApproval(app, {
           groupId: dto.groupId,
           temporaryGroupAssignment: dto.temporaryGroupAssignment,
-          pendingBatchCount: app.leg?.trophyId ? pendingInGroup : 0,
+          pendingBatchCount: usesGroup && dto.groupId ? pendingInGroup : 0,
         });
-        if (app.leg?.trophyId) pendingInGroup += 1;
+        if (usesGroup && dto.groupId) pendingInGroup += 1;
         await this.ensureBoatForApproval(app, user);
       } else if (nextStatus === ApplicationStatusEnum.WITHDRAWN) {
         await this.markWithdrawn(app);

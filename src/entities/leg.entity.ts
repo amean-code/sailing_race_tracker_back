@@ -14,6 +14,7 @@ import { LegKindEnum, RaceStatusEnum } from '../common/constants';
 import { Trophy } from './trophy.entity';
 import { Race } from './race.entity';
 import { RaceApplication } from './race-application.entity';
+import { TrophyGroup } from './trophy-group.entity';
 
 @Entity('legs')
 export class Leg {
@@ -93,6 +94,9 @@ export class Leg {
 
   @OneToMany(() => RaceApplication, (app) => app.leg)
   applications!: RaceApplication[];
+
+  @OneToMany(() => TrophyGroup, (group) => group.leg)
+  groups!: TrophyGroup[];
 
   @BeforeInsert()
   generateId() {

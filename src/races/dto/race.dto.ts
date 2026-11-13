@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsInt,
@@ -11,7 +12,10 @@ import {
   Min,
   MinLength,
   ValidateIf,
+  ValidateNested,
+  ArrayMinSize,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { RaceStatusEnum, RaceTypeEnum } from '../../common/constants';
 
 export class CreateRaceDto {
@@ -246,4 +250,69 @@ export class RaceActionDto {
   @IsOptional()
   @IsString()
   reason?: string;
+}
+
+export class GroupStartAssignmentDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  groupId!: string;
+
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  groupName!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  courseId?: string | null;
+}
+
+export class GroupStartConfigDto {
+  @ApiProperty()
+  @IsBoolean()
+  sameCourse!: boolean;
+
+  @ApiProperty()
+  @IsBoolean()
+  sameStart!: boolean;
+
+  @ApiProperty({ type: [GroupStartAssignmentDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => GroupStartAssignmentDto)
+  groups!: GroupStartAssignmentDto[];
+
+  /** When sameCourse=true, the shared course id. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  courseId?: string | null;
+}
+
+export class GroupStartActionDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  groupId!: string;
+
+  @ApiProperty({ enum: ['start', 'schedule', 'cancel_schedule'] })
+  @IsString()
+  action!: 'start' | 'schedule' | 'cancel_schedule';
+
+  /** Required when action=schedule: minutes from now (e.g. 5 or 10). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(120)
+  delayMinutes?: number;
+
+  /** Or absolute ISO schedule time. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  scheduledStartAt?: string;
 }

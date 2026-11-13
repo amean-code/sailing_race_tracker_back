@@ -14,6 +14,8 @@ import { SessionUser } from '../common/decorators';
 import { TrackPointsService } from '../track-points/track-points.service';
 import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
 import { countedApplicationWhere } from '../common/utils/active-applications';
+import { resolveCourseIdForGroup } from '../common/utils/race-group-mode';
+
 
 const FLEET_COLORS = [
   '#0ea5e9',
@@ -38,11 +40,15 @@ export class RaceFleetService {
     private readonly trackPointsService: TrackPointsService,
   ) {}
 
-  private serializeApplication(app: RaceApplication) {
+  private serializeApplication(
+    app: RaceApplication,
+    extras?: { trophyId?: string | null },
+  ) {
     const identity = resolveApplicationBoatIdentity(app);
     return {
       id: app.id,
       legId: app.legId,
+      trophyId: extras?.trophyId ?? app.leg?.trophyId ?? null,
       name: app.name,
       email: app.email,
       phone: app.phone,
@@ -52,6 +58,8 @@ export class RaceFleetService {
       notes: app.notes,
       status: app.status,
       boatId: app.boatId,
+      groupId: app.groupId ?? null,
+      groupName: app.group?.name ?? null,
       userId: app.userId,
       checkedInAt: app.checkedInAt?.toISOString() ?? null,
       finishPosition: null as number | null,
@@ -106,24 +114,26 @@ export class RaceFleetService {
     return race;
   }
 
+
   async getCompetitors(raceId: string, user: SessionUser) {
     const race = await this.loadRaceWithLeg(raceId);
     this.assertCanManageRace(race, user);
 
     const applications = await this.applicationsRepo.find({
       where: countedApplicationWhere(race.legId!),
-      relations: ['boat'],
+      relations: ['boat', 'group'],
       order: { createdAt: 'ASC' },
     });
 
     const latestByBoat = await this.trackPointsService.findLatestByRace(raceId);
 
+    const trophyId = race.leg?.trophyId ?? null;
     return {
       competitors: applications.map((app, index) => {
         const boat = app.boat ? this.serializeBoat(app.boat) : null;
         const position = app.boatId ? latestByBoat.get(app.boatId) ?? null : null;
         return {
-          application: this.serializeApplication(app),
+          application: this.serializeApplication(app, { trophyId }),
           boat,
           position,
           displayColor: boat?.displayColor ?? this.pickColor(index),
@@ -138,7 +148,7 @@ export class RaceFleetService {
 
     const app = await this.applicationsRepo.findOne({
       where: { id: applicationId, legId: race.legId! },
-      relations: ['boat'],
+      relations: ['boat', 'group'],
     });
     if (!app) throw new NotFoundException('Başvuru bulunamadı');
 
@@ -164,7 +174,7 @@ export class RaceFleetService {
 
     boat.applicationId = app.id;
     boat.raceId = raceId;
-    boat.courseId = race.courseId ?? null;
+    boat.courseId = resolveCourseIdForGroup(race, app.groupId);
     boat.status = 'registered';
     if (!boat.displayColor) {
       boat.displayColor = this.pickColor(existingCount);
@@ -182,11 +192,13 @@ export class RaceFleetService {
 
     const saved = await this.applicationsRepo.findOne({
       where: { id: app.id },
-      relations: ['boat'],
+      relations: ['boat', 'group'],
     });
 
     return {
-      application: this.serializeApplication(saved!),
+      application: this.serializeApplication(saved!, {
+        trophyId: race.leg?.trophyId ?? null,
+      }),
       boat: this.serializeBoat(saved!.boat!),
     };
   }

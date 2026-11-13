@@ -11,6 +11,7 @@ import {
   Max,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { LegKindEnum, RaceStatusEnum } from '../../common/constants';
@@ -254,4 +255,51 @@ export class CreateRaceUnderLegDto {
   @IsArray()
   @IsString({ each: true })
   courseIds?: string[];
+}
+
+export class CreateLegGroupDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  name!: string;
+
+  @ApiPropertyOptional({ description: 'null/omit = limitsiz' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  capacity?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
+}
+
+export class UpdateLegGroupDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  name?: string;
+
+  @ApiPropertyOptional({ description: 'null = limitsiz' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  capacity?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
 }

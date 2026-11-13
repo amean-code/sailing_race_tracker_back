@@ -66,7 +66,8 @@ function serializeTrophy(
 function serializeTrophyGroup(group: TrophyGroup, memberCount = 0) {
   return {
     id: group.id,
-    trophyId: group.trophyId,
+    trophyId: group.trophyId ?? null,
+    legId: group.legId ?? null,
     name: group.name,
     sortOrder: group.sortOrder,
     capacity: group.capacity ?? null,
@@ -507,6 +508,7 @@ export class TrophiesService {
 
     const group = this.groupsRepo.create({
       trophyId,
+      legId: null,
       name,
       capacity: dto.capacity ?? null,
       sortOrder: Number.isFinite(nextSort) ? nextSort : existingCount,
