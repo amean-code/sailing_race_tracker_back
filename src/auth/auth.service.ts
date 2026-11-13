@@ -21,6 +21,7 @@ import {
   InviteRefereeDto,
   SetupPasswordDto,
   UpdateUserStatusDto,
+  AdminResetPasswordDto,
   CreateAdminDto,
   UpdateAdminDto,
   UpdateProfileDto,
@@ -386,6 +387,26 @@ export class AuthService {
 
     const saved = await this.usersRepo.save(user);
     return this.toAdminUser(saved);
+  }
+
+  async resetUserPassword(actor: Pick<SessionUser, 'role' | 'sub'>, id: string, dto: AdminResetPasswordDto) {
+    if (actor.role !== UserRoleEnum.SUPER_ADMIN) {
+      throw new ForbiddenException('Şifre sıfırlama yalnızca süper yönetici tarafından yapılabilir');
+    }
+
+    const user = await this.usersRepo.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException('Kullanıcı bulunamadı.');
+    }
+
+    user.passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
+    user.currentSessionId = null;
+    user.inviteToken = null;
+    user.inviteTokenExpires = null;
+
+    const saved = await this.usersRepo.save(user);
+    invalidateUserSessionCache(saved.id);
+    return this.toPublicUser(saved);
   }
 
   async getReferees() {

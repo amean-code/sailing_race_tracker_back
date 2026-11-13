@@ -107,6 +107,13 @@ export class UpdateUserStatusDto {
   status!: UserStatusEnum;
 }
 
+export class AdminResetPasswordDto {
+  @ApiProperty({ minLength: 8 })
+  @IsString()
+  @MinLength(8, { message: 'Şifre en az 8 karakter olmalı' })
+  password!: string;
+}
+
 export class UpdateProfileDto {
   @ApiPropertyOptional()
   @IsOptional()

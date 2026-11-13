@@ -21,6 +21,7 @@ import {
   InviteRefereeDto,
   SetupPasswordDto,
   UpdateUserStatusDto,
+  AdminResetPasswordDto,
   CreateAdminDto,
   UpdateAdminDto,
   UpdateProfileDto,
@@ -145,6 +146,19 @@ export class AuthController {
     @Body() dto: UpdateUserStatusDto,
   ) {
     const user = await this.authService.updateUserStatus(session, id, dto);
+    return { user };
+  }
+
+  @Patch('users/:id/password')
+  @Roles('SUPER_ADMIN')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @ApiOperation({ summary: 'Kullanıcı şifresini sıfırla (Sadece Super Admin)' })
+  async resetUserPassword(
+    @CurrentUser() session: SessionUser,
+    @Param('id') id: string,
+    @Body() dto: AdminResetPasswordDto,
+  ) {
+    const user = await this.authService.resetUserPassword(session, id, dto);
     return { user };
   }
 
