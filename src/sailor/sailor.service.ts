@@ -23,6 +23,12 @@ import {
 } from '../common/checkpoint-progress';
 import { Boat } from '../entities/boat.entity';
 import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
+import {
+  resolveCourseIdForGroup,
+  resolveCourseSnapshotForGroup,
+  resolveScheduledStartAtForGroup,
+  resolveStartedAtForGroup,
+} from '../common/utils/race-group-mode';
 import { TrackPointsService } from '../track-points/track-points.service';
 
 type RaceWithApplication = {
@@ -245,15 +251,20 @@ export class SailorService {
       const { app, race } = pair;
       const raceState = race.raceState ?? {};
       const tracking = (raceState.tracking as Record<string, unknown> | undefined) ?? {};
-      const startedAt = (raceState.startedAt as string | undefined) ?? null;
-      const scheduledStartAt = (raceState.scheduledStartAt as string | undefined) ?? null;
-      const courseSnapshot = race.courseSnapshot ?? null;
+      // Per-group course + start: sailor must see the assignment for their application group.
+      const courseId = resolveCourseIdForGroup(race, app.groupId);
+      const courseSnapshot = resolveCourseSnapshotForGroup(race, app.groupId);
+      const startedAt = resolveStartedAtForGroup(raceState, app.groupId);
+      const scheduledStartAt = resolveScheduledStartAtForGroup(raceState, app.groupId);
       const raceResult = resultByKey.get(`${app.id}:${race.id}`);
 
       const appPasses = passesByAppRace.get(`${app.id}:${race.id}`) || [];
       const checkpoints =
         (courseSnapshot?.checkpoints as any[]) ??
-        (race.course?.checkpoints as any[]) ??
+        // Only fall back to live race.course when it matches this sailor's effective course.
+        (courseId && race.courseId === courseId
+          ? (race.course?.checkpoints as any[])
+          : null) ??
         [];
       const targets = checkpoints.filter((cp: any) => {
         const k = cp.kind || cp.type;
@@ -302,7 +313,8 @@ export class SailorService {
         raceId: race.id,
         legId: app.legId,
         boatId: app.boatId,
-        courseId: race.courseId ?? null,
+        groupId: app.groupId ?? null,
+        courseId,
         courseSnapshot,
         applicationId: app.id,
         applicationStatus,
@@ -312,7 +324,7 @@ export class SailorService {
         raceStatus: race.status ?? null,
         raceStartedAt: startedAt,
         raceFinishedAt: race.raceState?.finishedAt ?? null,
-        scheduledStartAt: scheduledStartAt,
+        scheduledStartAt,
         trackingConfig: resolveTrackingConfig(tracking),
         passedCheckpoints: appPasses,
         activeTargetIndex,
@@ -556,10 +568,14 @@ export class SailorService {
       raceResult?.fleetSize ??
       (await this.applicationsRepo.count({ where: countedApplicationWhere(race.legId) }));
 
-    const raceStartedAt = race.raceState?.startedAt as string | undefined;
+    const raceStartedAt = resolveStartedAtForGroup(race.raceState, app.groupId);
+    const courseSnapshot = resolveCourseSnapshotForGroup(race, app.groupId);
+    const courseId = resolveCourseIdForGroup(race, app.groupId);
     const checkpoints =
-      (race.courseSnapshot?.checkpoints as any[]) ??
-      (race.course?.checkpoints as any[]) ??
+      (courseSnapshot?.checkpoints as any[]) ??
+      (courseId && race.courseId === courseId
+        ? (race.course?.checkpoints as any[])
+        : null) ??
       [];
     const targets = checkpoints.filter((cp: any) => {
       const k = cp.kind || cp.type;
@@ -711,15 +727,6 @@ export class SailorService {
       passesByApp.get(pass.applicationId)!.push(pass);
     }
 
-    const checkpoints =
-      (race.courseSnapshot?.checkpoints as any[]) ??
-      (race.course?.checkpoints as any[]) ??
-      [];
-    const targets = checkpoints.filter((cp: any) => {
-      const k = cp.kind || cp.type;
-      return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
-    });
-    const totalCheckpoints = targets.length;
     const raceOver =
       race.status === RaceStatusEnum.FINISHED || race.status === RaceStatusEnum.CANCELLED;
 
@@ -728,6 +735,19 @@ export class SailorService {
       const finishPosition = raceResult?.finishPosition ?? null;
       const fleetSize = raceResult?.fleetSize ?? null;
       const appPasses = passesByApp.get(app.id) ?? [];
+      const courseSnapshot = resolveCourseSnapshotForGroup(race, app.groupId);
+      const courseId = resolveCourseIdForGroup(race, app.groupId);
+      const checkpoints =
+        (courseSnapshot?.checkpoints as any[]) ??
+        (courseId && race.courseId === courseId
+          ? (race.course?.checkpoints as any[])
+          : null) ??
+        [];
+      const targets = checkpoints.filter((cp: any) => {
+        const k = cp.kind || cp.type;
+        return k === 'start' || k === 'buoy' || k === 'gate' || k === 'finish';
+      });
+      const totalCheckpoints = targets.length;
       const passed = passedIndexSet(appPasses);
       const missedCheckpoints = buildMissedCheckpoints(targets, passed);
       const lastTimedPasses = appPasses

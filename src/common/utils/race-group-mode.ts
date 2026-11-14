@@ -78,6 +78,39 @@ export function resolveCourseIdForGroup(
   return race.courseId ?? null;
 }
 
+/** Frozen course snapshot for a competitor's group (falls back to race.courseSnapshot). */
+export function resolveCourseSnapshotForGroup(
+  race: {
+    courseSnapshot?: Record<string, unknown> | null;
+    raceState?: Record<string, unknown> | null;
+  },
+  groupId: string | null | undefined,
+): Record<string, unknown> | null {
+  const groupMode = readGroupMode(race.raceState);
+  if (groupMode && !groupMode.sameCourse && groupId) {
+    const entry = findGroupEntry(groupMode, groupId);
+    if (entry?.courseSnapshot && typeof entry.courseSnapshot === 'object') {
+      return entry.courseSnapshot;
+    }
+  }
+  return race.courseSnapshot ?? null;
+}
+
+/** Effective scheduled start ISO for a competitor's group. */
+export function resolveScheduledStartAtForGroup(
+  raceState: Record<string, unknown> | null | undefined,
+  groupId: string | null | undefined,
+): string | null {
+  const groupMode = readGroupMode(raceState);
+  if (groupMode && !groupMode.sameStart && groupId) {
+    const entry = findGroupEntry(groupMode, groupId);
+    if (entry?.scheduledStartAt) return entry.scheduledStartAt;
+    return null;
+  }
+  const scheduled = raceState?.scheduledStartAt;
+  return typeof scheduled === 'string' ? scheduled : null;
+}
+
 export function writeGroupMode(
   raceState: Record<string, unknown> | null | undefined,
   groupMode: RaceGroupMode | null,
