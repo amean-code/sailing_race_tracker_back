@@ -20,3 +20,5 @@ export { Certificate } from './certificate.entity';
 export { Device } from './device.entity';
 export { DeviceAssignment } from './device-assignment.entity';
 export { DeviceLiveEmitWatermark } from './device-live-emit-watermark.entity';
+export { Feedback } from './feedback.entity';
+export { FeedbackForm } from './feedback-form.entity';

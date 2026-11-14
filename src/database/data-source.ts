@@ -24,6 +24,8 @@ import {
   Device,
   DeviceAssignment,
   DeviceLiveEmitWatermark,
+  Feedback,
+  FeedbackForm,
 } from '../entities';
 
 export const AppDataSource = new DataSource({
@@ -52,6 +54,8 @@ export const AppDataSource = new DataSource({
     Device,
     DeviceAssignment,
     DeviceLiveEmitWatermark,
+    Feedback,
+    FeedbackForm,
   ],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: true,

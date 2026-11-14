@@ -27,6 +27,8 @@ import {
   Device,
   DeviceAssignment,
   DeviceLiveEmitWatermark,
+  Feedback,
+  FeedbackForm,
 } from './entities';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
@@ -52,6 +54,7 @@ import { TelemetryModule } from './telemetry/telemetry.module';
 import { SettingsModule } from './settings/settings.module';
 import { CertificatesModule } from './certificates/certificates.module';
 import { DevicesModule } from './devices/devices.module';
+import { FeedbackModule } from './feedback/feedback.module';
 
 @Module({
   imports: [
@@ -86,6 +89,8 @@ import { DevicesModule } from './devices/devices.module';
           Device,
           DeviceAssignment,
           DeviceLiveEmitWatermark,
+          Feedback,
+          FeedbackForm,
         ],
         synchronize: true,
         logging: process.env.NODE_ENV === 'production' ? false : ['query', 'error'],
@@ -114,6 +119,7 @@ import { DevicesModule } from './devices/devices.module';
     SettingsModule,
     CertificatesModule,
     DevicesModule,
+    FeedbackModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
