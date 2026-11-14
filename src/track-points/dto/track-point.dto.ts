@@ -3,13 +3,16 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsDateString,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { TrackPointSourceEnum } from '../../common/constants';
 
 export class TrackPointInputDto {
   @ApiProperty()
@@ -59,6 +62,30 @@ export class TrackPointInputDto {
   @IsOptional()
   @IsDateString()
   recordedAt?: string;
+
+  @ApiPropertyOptional({
+    description: 'Provenance — set by server paths; PWA clients should omit',
+    enum: TrackPointSourceEnum,
+  })
+  @IsOptional()
+  @IsIn([TrackPointSourceEnum.PWA, TrackPointSourceEnum.DEVICE])
+  source?: TrackPointSourceEnum | null;
+
+  @ApiPropertyOptional({
+    description: 'Idempotency key override (device ingest uses device:{id}:{ts})',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  clientKey?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Source device id when source=device; set by device ingest only',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  deviceId?: string | null;
 }
 
 export class SyncTrackPointsDto {
@@ -68,4 +95,12 @@ export class SyncTrackPointsDto {
   @ValidateNested({ each: true })
   @Type(() => TrackPointInputDto)
   points!: TrackPointInputDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'When true, PWA points for boats in this batch become the active live source even if a device is live. Device rows are still persisted.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  preferPhoneSource?: boolean;
 }

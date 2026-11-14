@@ -44,8 +44,19 @@ export class RaceEngineService {
   ) {}
 
   @OnEvent('gps.received')
-  async handleGpsReceived(payload: { raceId: string; boatId: string; lat: number; lng: number; heading: number; recordedAt: string }) {
-    const { raceId, boatId, lat, lng, heading, recordedAt } = payload;
+  async handleGpsReceived(payload: {
+    raceId: string;
+    boatId: string;
+    lat: number;
+    lng: number;
+    heading: number;
+    speed?: number | null;
+    recordedAt: string;
+    source?: string | null;
+    deviceId?: string | null;
+  }) {
+    const { raceId, boatId, lat, lng, heading, speed, recordedAt, source, deviceId } =
+      payload;
 
     this.eventEmitter.emit('boat.position.updated', {
       raceId,
@@ -53,7 +64,10 @@ export class RaceEngineService {
       lat,
       lng,
       heading,
+      speed: speed ?? null,
       recordedAt,
+      source: source ?? null,
+      deviceId: deviceId ?? null,
     });
 
     try {

@@ -42,6 +42,7 @@ function mapLocationToTrackPointInput(
   boatId: string,
   raceId: string,
   courseId: string | null,
+  deviceId: string,
   dto: {
     latitude: number;
     longitude: number;
@@ -61,6 +62,8 @@ function mapLocationToTrackPointInput(
     heading: dto.heading ?? null,
     accuracy: dto.accuracy ?? null,
     timestamp: dto.timestampMs,
+    source: 'device' as const,
+    clientKey: `device:${deviceId}:${dto.timestampMs}`,
   };
 }
 
@@ -75,6 +78,22 @@ function validateLocationRanges(dto: {
   if (dto.speed != null && dto.speed < 0) return 'invalid_speed';
   if (dto.heading != null && (dto.heading < 0 || dto.heading >= 360)) return 'invalid_heading';
   return null;
+}
+
+/** Heartbeat (lastSeen/lastLat) only after a track point was inserted or skipped. */
+function shouldUpdateDeviceHeartbeat(sync: {
+  inserted: number;
+  skipped: number;
+  failed: number;
+}) {
+  return sync.inserted + sync.skipped > 0;
+}
+
+function resolveCourseIdForIngest(
+  boatCourseId: string | null,
+  raceCourseId: string | null | undefined,
+) {
+  return boatCourseId ?? raceCourseId ?? null;
 }
 
 describe('IoT ingest resolve / map / validate', () => {
@@ -107,7 +126,7 @@ describe('IoT ingest resolve / map / validate', () => {
     assert.deepEqual(ctx, { ok: false, code: 'unassigned' });
   });
 
-  it('boat without race → rejected (422 policy)', () => {
+  it('boat without race → resolve reports no_race (service still accepts heartbeat-only)', () => {
     const ctx = resolveIngestContext(
       { status: DeviceStatusEnum.ACTIVE, assignedBoatId: 'boat-1' },
       { id: 'boat-1', raceId: null, courseId: null },
@@ -116,7 +135,7 @@ describe('IoT ingest resolve / map / validate', () => {
   });
 
   it('maps latitude/longitude to lat/lng for TrackPointsService', () => {
-    const point = mapLocationToTrackPointInput('b1', 'r1', 'c1', {
+    const point = mapLocationToTrackPointInput('b1', 'r1', 'c1', 'dev-9', {
       latitude: 37.1,
       longitude: 27.2,
       speed: 3,
@@ -131,6 +150,8 @@ describe('IoT ingest resolve / map / validate', () => {
     assert.equal(point.timestamp, 1_700_000_000_000);
     // HDOP must never be auto-mapped; only explicit accuracy metres.
     assert.equal(point.accuracy, 5);
+    assert.equal(point.source, 'device');
+    assert.equal(point.clientKey, 'device:dev-9:1700000000000');
   });
 
   it('rejects invalid latitude / longitude / speed / heading', () => {
@@ -144,10 +165,22 @@ describe('IoT ingest resolve / map / validate', () => {
     assert.equal(validateLocationRanges({ latitude: 37, longitude: 27, heading: 0 }), null);
   });
 
-  it('clientKey shape for TrackPoints remains boatId:timestampMs', () => {
-    const boatId = 'boat-abc';
+  it('device clientKey uses device:{deviceId}:{timestampMs}', () => {
+    const deviceId = 'device-abc';
     const timestampMs = 1_700_000_123_456;
-    const clientKey = `${boatId}:${timestampMs}`;
-    assert.equal(clientKey, 'boat-abc:1700000123456');
+    const clientKey = `device:${deviceId}:${timestampMs}`;
+    assert.equal(clientKey, 'device:device-abc:1700000123456');
+  });
+
+  it('updates heartbeat only when track point insert or skip succeeded', () => {
+    assert.equal(shouldUpdateDeviceHeartbeat({ inserted: 1, skipped: 0, failed: 0 }), true);
+    assert.equal(shouldUpdateDeviceHeartbeat({ inserted: 0, skipped: 1, failed: 0 }), true);
+    assert.equal(shouldUpdateDeviceHeartbeat({ inserted: 0, skipped: 0, failed: 1 }), false);
+  });
+
+  it('falls back to race.courseId when boat.courseId is null', () => {
+    assert.equal(resolveCourseIdForIngest(null, 'course-9'), 'course-9');
+    assert.equal(resolveCourseIdForIngest('course-1', 'course-9'), 'course-1');
+    assert.equal(resolveCourseIdForIngest(null, null), null);
   });
 });

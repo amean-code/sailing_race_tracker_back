@@ -22,6 +22,8 @@ import {
   Leg,
   RaceResult,
   Device,
+  DeviceAssignment,
+  DeviceLiveEmitWatermark,
 } from '../entities';
 
 export const AppDataSource = new DataSource({
@@ -48,6 +50,8 @@ export const AppDataSource = new DataSource({
     Leg,
     RaceResult,
     Device,
+    DeviceAssignment,
+    DeviceLiveEmitWatermark,
   ],
   migrations: ['src/database/migrations/*.ts'],
   synchronize: true,

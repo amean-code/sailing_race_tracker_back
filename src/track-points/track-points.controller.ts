@@ -1,9 +1,9 @@
 import { Body, Controller, Get, Logger, Post, Query } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { TrackPointsService } from './track-points.service';
-import { SyncTrackPointsDto } from './dto/track-point.dto';
+import { SyncTrackPointsDto, TrackPointInputDto } from './dto/track-point.dto';
 import { Roles } from '../common/decorators';
-import { AUTH_COOKIE } from '../common/constants';
+import { AUTH_COOKIE, TrackPointSourceEnum } from '../common/constants';
 
 @ApiTags('track-points')
 @ApiCookieAuth(AUTH_COOKIE)
@@ -13,12 +13,24 @@ export class TrackPointsController {
 
   constructor(private readonly trackPointsService: TrackPointsService) {}
 
+  /** PWA/HTTP clients cannot claim device provenance or custom device clientKeys. */
+  private forcePwaPoints(points: TrackPointInputDto[]): TrackPointInputDto[] {
+    return (points || []).map((point) => ({
+      ...point,
+      source: TrackPointSourceEnum.PWA,
+      clientKey: undefined,
+      deviceId: undefined,
+    }));
+  }
+
   @Post('sync')
   @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
   @ApiOperation({ summary: 'Offline GPS buffer batch sync (idempotent)' })
   async sync(@Body() dto: SyncTrackPointsDto) {
     try {
-      return await this.trackPointsService.syncBatch(dto.points);
+      return await this.trackPointsService.syncBatch(this.forcePwaPoints(dto.points), {
+        preferPhoneSource: Boolean(dto.preferPhoneSource),
+      });
     } catch (err: any) {
       this.logger.error(
         JSON.stringify({
@@ -37,7 +49,9 @@ export class TrackPointsController {
   @ApiOperation({ summary: 'GPS noktaları batch kaydet (legacy)' })
   async create(@Body() dto: SyncTrackPointsDto) {
     try {
-      return await this.trackPointsService.createBatch(dto.points);
+      return await this.trackPointsService.createBatch(this.forcePwaPoints(dto.points), {
+        preferPhoneSource: Boolean(dto.preferPhoneSource),
+      });
     } catch (err: any) {
       this.logger.error(
         JSON.stringify({
@@ -58,6 +72,20 @@ export class TrackPointsController {
   async live(@Query('limit') limit?: string) {
     const points = await this.trackPointsService.findLive(limit ? Number(limit) : 50);
     return { points };
+  }
+
+  @Get('latest')
+  @Roles('SAILOR', 'COMMITTEE', 'ADMIN')
+  @ApiQuery({ name: 'raceId', required: true })
+  @ApiOperation({
+    summary: 'Yarıştaki her tekne için son GPS noktası (DISTINCT ON — global limit penceresi yok)',
+  })
+  async latestByRace(@Query('raceId') raceId?: string) {
+    if (!raceId) {
+      return { points: [] };
+    }
+    const byBoat = await this.trackPointsService.findLatestByRace(raceId);
+    return { points: [...byBoat.values()] };
   }
 
   @Get()

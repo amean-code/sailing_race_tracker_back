@@ -25,6 +25,8 @@ import {
   Leg,
   RaceResult,
   Device,
+  DeviceAssignment,
+  DeviceLiveEmitWatermark,
 } from './entities';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
@@ -82,6 +84,8 @@ import { DevicesModule } from './devices/devices.module';
           Leg,
           RaceResult,
           Device,
+          DeviceAssignment,
+          DeviceLiveEmitWatermark,
         ],
         synchronize: true,
         logging: process.env.NODE_ENV === 'production' ? false : ['query', 'error'],

@@ -96,6 +96,39 @@ export enum DeviceStatusEnum {
   DISABLED = 'DISABLED',
 }
 
+export enum DeviceAssignmentStatusEnum {
+  ACTIVE = 'ACTIVE',
+  RELEASED = 'RELEASED',
+  REPLACED = 'REPLACED',
+}
+
+/** Provenance for track_points / live GPS events — nullable in DB for legacy rows. */
+export enum TrackPointSourceEnum {
+  PWA = 'pwa',
+  DEVICE = 'device',
+}
+
+/**
+ * Assigned ACTIVE device is "live" within this window:
+ * PWA sync is suppressed and sailor map prefers device
+ * (unless the sailor has opted into phone as the active source).
+ */
+export const DEVICE_LIVE_MAX_AGE_MS = 30_000;
+
+/**
+ * How long a sailor "prefer phone" sync signal keeps device GPS from
+ * driving race-engine / live fleet broadcasts. Refreshed on each phone sync;
+ * keep short so switching back to Device resumes device live emits quickly.
+ */
+export const PHONE_SOURCE_PREFERENCE_TTL_MS = 15_000;
+
+/**
+ * Device TrackPoints older than this (serverNow − recordedAt) may still persist
+ * for playback/debug, but must not emit gps.received / race-engine live path.
+ * Tunable constant — can move to config later without a schema change.
+ */
+export const DEVICE_LIVE_EMIT_MAX_AGE_MS = 120_000;
+
 export enum PaymentStatusEnum {
   NONE = 'NONE',
   PENDING = 'PENDING',

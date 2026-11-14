@@ -23,6 +23,7 @@ import {
 } from '../common/checkpoint-progress';
 import { Boat } from '../entities/boat.entity';
 import { resolveApplicationBoatIdentity } from '../common/utils/boat-identity';
+import { TrackPointsService } from '../track-points/track-points.service';
 
 type RaceWithApplication = {
   application: {
@@ -56,6 +57,7 @@ export class SailorService {
     private readonly checkpointPassRepo: Repository<CheckpointPass>,
     @InjectRepository(Boat)
     private readonly boatsRepo: Repository<Boat>,
+    private readonly trackPointsService: TrackPointsService,
   ) { }
 
   private async raceWithCount(race: Race) {
@@ -234,6 +236,11 @@ export class SailorService {
       });
     }
 
+    const boatIds = [
+      ...new Set(activeList.map((p) => p.app.boatId).filter((id): id is string => Boolean(id))),
+    ];
+    const trackingByBoat = await this.trackPointsService.findTrackingDevicesByBoatIds(boatIds);
+
     const mapActiveRace = (pair: ActivePair) => {
       const { app, race } = pair;
       const raceState = race.raceState ?? {};
@@ -288,6 +295,8 @@ export class SailorService {
             : app.status;
 
       const identity = resolveApplicationBoatIdentity(app);
+      const trackingDevice = app.boatId ? (trackingByBoat.get(app.boatId) ?? null) : null;
+      const locationSource = trackingDevice?.live ? 'device' : 'phone';
 
       return {
         raceId: race.id,
@@ -317,6 +326,8 @@ export class SailorService {
         raceElapsedSeconds: Math.max(0, elapsedSeconds ?? 0) > 0 || elapsedSeconds === 0
           ? elapsedSeconds
           : null,
+        locationSource,
+        trackingDevice,
       };
     };
 

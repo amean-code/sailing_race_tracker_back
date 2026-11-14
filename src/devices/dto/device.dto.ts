@@ -41,6 +41,18 @@ export class AssignDeviceDto {
   @IsString()
   @MinLength(1)
   boatId!: string;
+
+  @ApiPropertyOptional({ description: 'Reason when replacing an existing assignment' })
+  @IsOptional()
+  @IsString()
+  replacementReason?: string;
+}
+
+export class UnassignDeviceDto {
+  @ApiPropertyOptional({ description: 'Reason for releasing the assignment' })
+  @IsOptional()
+  @IsString()
+  replacementReason?: string;
 }
 
 export class DeviceLocationDto {

@@ -47,6 +47,15 @@ export class TrackPoint {
   @Column({ name: 'client_key', type: 'text', nullable: true, unique: true })
   clientKey!: string | null;
 
+  /** 'pwa' | 'device' — null for legacy rows written before provenance existed. */
+  @Column({ type: 'text', nullable: true })
+  source!: string | null;
+
+  /** Source IoT device when source=device; null for PWA / legacy rows. */
+  @Index('track_points_device_id_idx')
+  @Column({ name: 'device_id', type: 'text', nullable: true })
+  deviceId!: string | null;
+
   @Column({ name: 'recorded_at', type: 'timestamp' })
   recordedAt!: Date;
 

@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -16,12 +17,13 @@ import {
 } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AUTH_COOKIE } from '../common/constants';
-import { Public, Roles } from '../common/decorators';
+import { CurrentUser, Public, Roles, SessionUser } from '../common/decorators';
 import { Device } from '../entities/device.entity';
 import {
   AssignDeviceDto,
   CreateDeviceDto,
   DeviceLocationDto,
+  UnassignDeviceDto,
   UpdateDeviceDto,
 } from './dto/device.dto';
 import { DevicesService } from './devices.service';
@@ -68,6 +70,15 @@ export class DevicesController {
     return { devices };
   }
 
+  @Get('assignments')
+  @ApiCookieAuth(AUTH_COOKIE)
+  @Roles('ADMIN', 'SUPER_ADMIN', 'COMMITTEE')
+  @ApiOperation({ summary: 'List device assignment history' })
+  async listAssignments(@Query('deviceId') deviceId?: string) {
+    const assignments = await this.devicesService.listAssignments(deviceId);
+    return { assignments };
+  }
+
   @Get(':id')
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('ADMIN', 'SUPER_ADMIN', 'COMMITTEE')
@@ -89,18 +100,27 @@ export class DevicesController {
   @Post(':id/assign')
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('ADMIN', 'SUPER_ADMIN', 'COMMITTEE')
-  @ApiOperation({ summary: 'Assign device to a boat' })
-  async assign(@Param('id') id: string, @Body() dto: AssignDeviceDto) {
-    const device = await this.devicesService.assign(id, dto);
-    return { device };
+  @ApiOperation({
+    summary: 'Assign device to a boat (one active device per boat; history recorded)',
+  })
+  async assign(
+    @Param('id') id: string,
+    @Body() dto: AssignDeviceDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    return this.devicesService.assign(id, dto, user?.sub ?? null);
   }
 
   @Post(':id/unassign')
   @ApiCookieAuth(AUTH_COOKIE)
   @Roles('ADMIN', 'SUPER_ADMIN', 'COMMITTEE')
-  @ApiOperation({ summary: 'Unassign device from its boat' })
-  async unassign(@Param('id') id: string) {
-    const device = await this.devicesService.unassign(id);
+  @ApiOperation({ summary: 'Unassign device from its boat (history recorded)' })
+  async unassign(
+    @Param('id') id: string,
+    @Body() dto: UnassignDeviceDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    const device = await this.devicesService.unassign(id, dto || {}, user?.sub ?? null);
     return { device };
   }
 
