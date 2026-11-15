@@ -23,10 +23,14 @@ export class CourseExportsService {
   }
 
   async create(dto: CreateCourseExportDto, user?: SessionUser) {
-    const checkpoints = Array.isArray(dto.checkpoints) ? dto.checkpoints : [];
-    if (checkpoints.length === 0) {
+    const rawCheckpoints = Array.isArray(dto.checkpoints) ? dto.checkpoints : [];
+    if (rawCheckpoints.length === 0) {
       throw new BadRequestException('En az bir parkur elemanı gerekli.');
     }
+    // Persist as plain JSON objects (entity column is Record<string, unknown>[]).
+    const checkpoints = JSON.parse(
+      JSON.stringify(rawCheckpoints),
+    ) as Record<string, unknown>[];
 
     const row = this.exportsRepo.create({
       title: String(dto.title || '').trim(),
