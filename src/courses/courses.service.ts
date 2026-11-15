@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { In, Repository } from 'typeorm';
 import { Course } from '../entities/course.entity';
 import { CreateCourseDto, UpdateCourseDto } from './dto/course.dto';
@@ -9,6 +10,11 @@ import {
   normalizeCourseNameForStorage,
   displayCourseName,
 } from '../common/utils/course-storage-name';
+import {
+  refreshGroupModeCourseSnapshots,
+  writeGroupMode,
+} from '../common/utils/race-group-mode';
+import { serializeRace, type RaceLike } from '../common/utils/serialize-race';
 
 import { Race } from '../entities/race.entity';
 import { Leg } from '../entities/leg.entity';
@@ -39,7 +45,75 @@ export class CoursesService {
     private readonly coursesRepo: Repository<Course>,
     @InjectRepository(Race)
     private readonly racesRepo: Repository<Race>,
+    private readonly eventEmitter: EventEmitter2,
   ) { }
+
+  /**
+   * Keep race + per-group frozen snapshots aligned with the live course while the
+   * race is still editable. Sailor active-race prefers these snapshots.
+   */
+  private courseSnapshotPayload(course: Course): Record<string, unknown> {
+    // Never embed relations (e.g. races) into frozen snapshots.
+    return {
+      id: course.id,
+      name: course.name,
+      status: course.status,
+      checkpoints: course.checkpoints ?? [],
+      createdById: course.createdById ?? null,
+      createdAt: course.createdAt,
+      updatedAt: course.updatedAt,
+    };
+  }
+
+  private async syncLinkedRaceSnapshots(course: Course) {
+    const snapshot = this.courseSnapshotPayload(course);
+    // Match race.courseId, course pool, or groupMode entries that freeze this course.
+    const linked = await this.racesRepo
+      .createQueryBuilder('race')
+      .where('race.status NOT IN (:...done)', {
+        done: [RaceStatusEnum.FINISHED, RaceStatusEnum.CANCELLED],
+      })
+      .andWhere(
+        `(race.course_id = :cid OR race.course_ids::text LIKE :cidLike OR race.race_state::text LIKE :cidLike)`,
+        { cid: course.id, cidLike: `%${course.id}%` },
+      )
+      .getMany();
+
+    for (const race of linked) {
+      let dirty = false;
+
+      if (race.courseId === course.id) {
+        race.courseSnapshot = snapshot;
+        dirty = true;
+      }
+
+      const nextGroupMode = refreshGroupModeCourseSnapshots(
+        race.raceState,
+        course.id,
+        snapshot,
+      );
+      if (nextGroupMode) {
+        race.raceState = writeGroupMode(race.raceState, nextGroupMode);
+        dirty = true;
+      }
+
+      if (!dirty) continue;
+
+      const saved = await this.racesRepo.save(race);
+      const serialized = serializeRace({ ...saved, applicationCount: 0 } as RaceLike);
+      this.eventEmitter.emit('race.updated', {
+        raceId: saved.id,
+        status: saved.status,
+        raceState: saved.raceState ?? {},
+        courseSnapshot: saved.courseSnapshot ?? null,
+        race: serialized,
+      });
+      this.eventEmitter.emit('course.updated', {
+        raceId: saved.id,
+        courseSnapshot: saved.courseSnapshot,
+      });
+    }
+  }
 
   serialize(course: Course & { raceCount?: number }) {
     return {
@@ -186,6 +260,7 @@ export class CoursesService {
     course.name = await this.resolveUniqueName(storageName, id);
     course.checkpoints = dto.checkpoints as unknown as Record<string, unknown>[];
     const saved = await this.coursesRepo.save(course);
+    await this.syncLinkedRaceSnapshots(saved);
     return this.findOne(saved.id, user);
   }
 

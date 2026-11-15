@@ -28,7 +28,11 @@ import {
   RaceResultStatusEnum,
 } from '../common/constants';
 import { SessionUser } from '../common/decorators';
-import { serializeRace, RaceLike } from '../common/utils/serialize-race';
+import {
+  computeRegistrationState,
+  serializeRace,
+  RaceLike,
+} from '../common/utils/serialize-race';
 import {
   CreateRaceDto,
   RaceApplicationDto,
@@ -170,10 +174,27 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private emitRaceUpdated(race: Race, applicationCount?: number) {
-    const serialized = serializeRace({
-      ...race,
-      applicationCount: applicationCount ?? 0,
-    } as RaceLike);
+    const capacity = race.capacity ?? race.leg?.capacity ?? null;
+    const registrationDeadline =
+      race.registrationDeadline ?? race.leg?.registrationDeadline ?? null;
+    const count = applicationCount ?? 0;
+    const serialized = {
+      ...serializeRace({
+        ...race,
+        capacity,
+        registrationDeadline,
+        applicationCount: count,
+      } as RaceLike),
+      capacity,
+      ...computeRegistrationState(
+        {
+          status: race.status,
+          registrationDeadline,
+          capacity,
+        },
+        count,
+      ),
+    };
     this.eventEmitter.emit('race.updated', {
       raceId: race.id,
       status: race.status,
@@ -545,8 +566,17 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async withCount(race: Race) {
-    return serializeRace({
+    const applicationCount = race.legId
+      ? await this.applicationsRepo.count({ where: countedApplicationWhere(race.legId) })
+      : 0;
+    const capacity = race.capacity ?? race.leg?.capacity ?? null;
+    const registrationDeadline =
+      race.registrationDeadline ?? race.leg?.registrationDeadline ?? null;
+    const serialized = serializeRace({
       ...race,
+      capacity,
+      registrationDeadline,
+      applicationCount,
       leg: race.leg
         ? {
             id: race.leg.id,
@@ -562,6 +592,15 @@ export class RacesService implements OnModuleInit, OnModuleDestroy {
           }
         : null,
     } as RaceLike);
+    const reg = computeRegistrationState(
+      {
+        status: race.status,
+        registrationDeadline,
+        capacity,
+      },
+      applicationCount,
+    );
+    return { ...serialized, capacity, ...reg };
   }
 
   private async loadRace(id: string) {

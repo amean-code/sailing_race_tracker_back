@@ -111,6 +111,27 @@ export function resolveScheduledStartAtForGroup(
   return typeof scheduled === 'string' ? scheduled : null;
 }
 
+/**
+ * Refresh frozen courseSnapshot on any groupMode entry that still points at courseId.
+ * Returns null when groupMode is absent or unchanged.
+ */
+export function refreshGroupModeCourseSnapshots(
+  raceState: Record<string, unknown> | null | undefined,
+  courseId: string,
+  courseSnapshot: Record<string, unknown>,
+): RaceGroupMode | null {
+  const groupMode = readGroupMode(raceState);
+  if (!groupMode) return null;
+  let changed = false;
+  const groups = groupMode.groups.map((g) => {
+    if (g.courseId !== courseId) return g;
+    changed = true;
+    return { ...g, courseSnapshot };
+  });
+  if (!changed) return null;
+  return { ...groupMode, groups };
+}
+
 export function writeGroupMode(
   raceState: Record<string, unknown> | null | undefined,
   groupMode: RaceGroupMode | null,

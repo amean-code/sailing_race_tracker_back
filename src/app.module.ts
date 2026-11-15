@@ -29,6 +29,7 @@ import {
   DeviceLiveEmitWatermark,
   Feedback,
   FeedbackForm,
+  CourseExportSnapshot,
 } from './entities';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
@@ -55,6 +56,7 @@ import { SettingsModule } from './settings/settings.module';
 import { CertificatesModule } from './certificates/certificates.module';
 import { DevicesModule } from './devices/devices.module';
 import { FeedbackModule } from './feedback/feedback.module';
+import { CourseExportsModule } from './course-exports/course-exports.module';
 
 @Module({
   imports: [
@@ -91,6 +93,7 @@ import { FeedbackModule } from './feedback/feedback.module';
           DeviceLiveEmitWatermark,
           Feedback,
           FeedbackForm,
+          CourseExportSnapshot,
         ],
         synchronize: true,
         logging: process.env.NODE_ENV === 'production' ? false : ['query', 'error'],
@@ -120,6 +123,7 @@ import { FeedbackModule } from './feedback/feedback.module';
     CertificatesModule,
     DevicesModule,
     FeedbackModule,
+    CourseExportsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

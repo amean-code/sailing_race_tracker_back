@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  refreshGroupModeCourseSnapshots,
   resolveCourseIdForGroup,
   resolveCourseSnapshotForGroup,
   resolveScheduledStartAtForGroup,
@@ -75,5 +76,19 @@ describe('race-group-mode course/start resolution', () => {
       '2026-11-14T10:05:00.000Z',
     );
     assert.equal(resolveStartedAtForGroup(raceWithPerGroupCourses.raceState, 'g2'), null);
+  });
+
+  it('refreshes only matching group course snapshots', () => {
+    const next = refreshGroupModeCourseSnapshots(
+      raceWithPerGroupCourses.raceState,
+      'course-b',
+      { id: 'course-b', checkpoints: [{ kind: 'start' }] },
+    );
+    assert.ok(next);
+    assert.equal((next!.groups[1].courseSnapshot as { id: string }).id, 'course-b');
+    assert.equal(
+      (next!.groups[0].courseSnapshot as { id: string }).id,
+      'course-a',
+    );
   });
 });
