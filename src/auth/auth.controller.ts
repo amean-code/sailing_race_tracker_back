@@ -53,13 +53,21 @@ export class AuthController {
     res.clearCookie(AUTH_COOKIE, { path: '/' });
   }
 
+  private extractBearerToken(req: Request): string | undefined {
+    const header = req.headers?.authorization;
+    if (!header || typeof header !== 'string') return undefined;
+    const [scheme, value] = header.split(' ');
+    if (scheme?.toLowerCase() !== 'bearer' || !value) return undefined;
+    return value;
+  }
+
   @Public()
   @Post('register')
   @ApiOperation({ summary: 'Yeni kullanıcı kaydı' })
   async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
     const { user, token } = await this.authService.register(dto);
     if (token) this.setCookie(res, token);
-    return { user };
+    return { user, token: token ?? undefined };
   }
 
   @Public()
@@ -68,14 +76,15 @@ export class AuthController {
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const { user, token } = await this.authService.login(dto);
     this.setCookie(res, token);
-    return { user };
+    return { user, token };
   }
 
   @Public()
   @Post('logout')
   @ApiOperation({ summary: 'Oturumu kapat (geçersiz/eski oturumda da cookie temizlenir)' })
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const token = req.cookies?.[AUTH_COOKIE] as string | undefined;
+    const token =
+      (req.cookies?.[AUTH_COOKIE] as string | undefined) ?? this.extractBearerToken(req);
     if (token) {
       try {
         const payload = this.jwtService.verify<{ sub?: string; sessionId?: string }>(token);
@@ -256,6 +265,6 @@ export class AuthController {
   async setupPassword(@Body() dto: SetupPasswordDto, @Res({ passthrough: true }) res: Response) {
     const { user, token } = await this.authService.setupPassword(dto);
     if (token) this.setCookie(res, token);
-    return { user };
+    return { user, token: token ?? undefined };
   }
 }
